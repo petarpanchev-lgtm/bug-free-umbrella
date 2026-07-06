@@ -1,12 +1,18 @@
 # Kullamagi Breakout Score — Web App
 
 A Streamlit web app version of the Kullamagi/Qullamaggie breakout scoring tool.
-Enter a ticker, get a 0-100 fit score plus a breakdown. See the main
-`Kullamagi_Trading_Playbook.docx` for the full rule set this is based on.
+Two tabs:
+- **Single Ticker** — enter a ticker, get a 0-100 fit score plus a breakdown.
+- **Screener** — scan S&P 500 / Nasdaq-100 / a custom ticker list and show
+  only the ones scoring above a threshold (default 90+).
+
+See the main `Kullamagi_Trading_Playbook.docx` for the full rule set this is based on.
 
 Files in this folder:
-- `app.py` — the Streamlit UI
+- `app.py` — the Streamlit UI (both tabs)
 - `kullamagi_score.py` — the scoring logic (same as the standalone CLI script)
+- `screener.py` — ticker universe fetchers (S&P 500 / Nasdaq-100 via Wikipedia,
+  with a small offline fallback list) + the batch-scan/filter engine
 - `requirements.txt` — dependencies
 
 ## Run it locally first (optional, to confirm it works)
@@ -26,14 +32,14 @@ server management, no credit card, free for public apps.
 1. **Create a GitHub repo** (if you don't already have one for this).
    - Go to github.com → New repository → name it e.g. `kullamagi-score` →
      Create.
-   - Upload the three files in this folder (`app.py`, `kullamagi_score.py`,
-     `requirements.txt`) via the GitHub web UI ("Add file" → "Upload files"),
-     or push them with git:
+   - Upload the four files in this folder (`app.py`, `kullamagi_score.py`,
+     `screener.py`, `requirements.txt`) via the GitHub web UI ("Add file" →
+     "Upload files"), or push them with git:
      ```bash
      cd kullamagi-web
      git init
-     git add app.py kullamagi_score.py requirements.txt
-     git commit -m "Kullamagi breakout score app"
+     git add app.py kullamagi_score.py screener.py requirements.txt
+     git commit -m "Kullamagi breakout score app + screener"
      git branch -M main
      git remote add origin https://github.com/<your-username>/kullamagi-score.git
      git push -u origin main
@@ -66,6 +72,28 @@ server management, no credit card, free for public apps.
 - If you'd rather not use GitHub/Streamlit Cloud, the same `app.py` runs on
   any host that supports Python web apps (Render, Railway, Fly.io, etc.) —
   the command to run is `streamlit run app.py --server.port $PORT --server.address 0.0.0.0`.
+
+## Using the Screener tab
+
+1. Pick a universe: **S&P 500** or **Nasdaq-100** (fetched live from Wikipedia
+   each run — if that fetch ever fails, a small bundled fallback list of
+   well-known large caps is used instead so the screener still works), or
+   **Custom list** (paste tickers or upload a CSV with a `Ticker`/`Symbol`
+   column).
+2. Set the **minimum score** (defaults to 90) and a **max tickers to scan**
+   safety cap (defaults to 150 — raise it gradually; scanning the full S&P
+   500 takes a few minutes and uses a lot of data-provider calls).
+3. Click **Run screener**. Tickers are downloaded in batches (not one at a
+   time) to keep it reasonably fast, with a progress bar. Only tickers
+   scoring at or above your threshold are shown, sorted highest first, with
+   a CSV download button for the results.
+4. The market-environment banner (SPY 10-day vs. 20-day MA) is shown once at
+   the top of the results — it applies to every ticker in the list, since
+   it's a read on the general market, not the individual stock.
+
+Tickers with too little price history, or that fail to download, are
+skipped and listed in a collapsed "skipped" section rather than breaking
+the whole scan.
 
 ## Disclaimer
 Educational tool only, not financial advice. Not affiliated with or endorsed

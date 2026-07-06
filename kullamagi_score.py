@@ -108,6 +108,35 @@ def consolidation_quality(df, lookback=40, recent=10):
     }
 
 
+def market_regime(spy_df):
+    """
+    Kullamagi's own market-environment filter (per his 2025/2026 Market
+    Wizards: The Next Generation interview): uptrend = both the 10-day and
+    20-day MA of the general market rising / 10-day > 20-day; caution/
+    downtrend = 10-day crosses below 20-day. He says this simple filter
+    keeps him out of bad markets ~80% of the time and in good markets ~80%
+    of the time, and applies specifically to Breakout and Episodic Pivot
+    setups (Parabolic Shorts are traded regardless of market direction).
+    """
+    if spy_df is None or len(spy_df) < 25:
+        return {"trend": "unknown", "sma10": None, "sma20": None}
+
+    close = spy_df["Close"]
+    sma10 = close.rolling(10).mean()
+    sma20 = close.rolling(20).mean()
+    last10, last20 = sma10.iloc[-1], sma20.iloc[-1]
+
+    if pd.isna(last10) or pd.isna(last20):
+        return {"trend": "unknown", "sma10": None, "sma20": None}
+
+    trend = "uptrend" if last10 > last20 else "downtrend"
+    return {
+        "trend": trend,
+        "sma10": round(float(last10), 2),
+        "sma20": round(float(last20), 2),
+    }
+
+
 def volume_profile(df, recent=10, baseline=50):
     if len(df) < baseline:
         return None
@@ -286,6 +315,18 @@ def score_breakout_fit(df, spy_df=None):
     else:
         result["rating"] = "D - Not a current fit"
 
+    # ---------------- Market environment filter (Breakout/EP gate) -----
+    regime = market_regime(spy_df)
+    result["market_environment"] = regime
+    if regime["trend"] == "downtrend":
+        result["flags"].append(
+            "Market environment CAUTION: the general market's 10-day MA is "
+            "below its 20-day MA. Kullamagi's own rule is to stand aside on "
+            "Breakout and Episodic Pivot setups in this environment (his "
+            "single largest drawdown came from ignoring this exact filter). "
+            "Parabolic Short setups are not affected by this filter."
+        )
+
     # ---------------- Qualitative flags: EP / Parabolic short ----------
     if len(df) >= 2:
         prev_close = close.iloc[-2]
@@ -348,6 +389,10 @@ def print_report(ticker, result):
         print(f"  Base contraction ratio: {c['contraction_ratio']:.2f} (lower = tighter)")
         print(f"  Higher-low frequency (last 10d): {c['higher_low_frac']*100:.0f}%")
         print(f"  Distance to base high: {c['dist_to_base_high_pct']:.1f}%")
+    me = result.get("market_environment")
+    if me and me.get("trend") != "unknown":
+        print(f"  Market environment (SPY 10dma vs 20dma): {me['trend'].upper()}"
+              f"  (10dma {me['sma10']} / 20dma {me['sma20']})")
     if result["flags"]:
         print("-" * 60)
         print("  Flags:")
