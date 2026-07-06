@@ -130,10 +130,13 @@ def universe_picker(key_prefix):
         "Max tickers to scan (safety cap)", min_value=10, max_value=10000,
         value=3000, step=100, key=f"{key_prefix}_max",
         help="Raise this to scan the full 'All US Stocks' universe (~6,000-8,000 "
-             "tickers). Larger scans take longer -- expect several minutes for 3,000+.",
+             "tickers). Larger scans take longer -- expect several minutes for 3,000+, "
+             "and Yahoo Finance may rate-limit very large scans (the app retries failed "
+             "batches automatically, but if you keep seeing rate-limit errors, lower this "
+             "number or try again in a few minutes).",
     )
 
-    if st.button("Fetch universe & run", type="primary", use_container_width=True, key=f"{key_prefix}_run"):
+    if st.button("Fetch universe & run", type="primary", width="stretch", key=f"{key_prefix}_run"):
         if universe_choice == "S&P 500":
             with st.spinner("Fetching S&P 500 list..."):
                 tickers = get_sp500_tickers()
@@ -151,6 +154,13 @@ def universe_picker(key_prefix):
                     tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
         else:
             tickers = custom_tickers or []
+        # Belt-and-suspenders: whatever the source, make sure every entry
+        # reaching the downloader/screeners is a clean, non-empty string.
+        # (A malformed row from a live feed like the Nasdaq Trader symbol
+        # directory once slipped a bad value through and crashed the
+        # skipped-tickers display -- this stops that class of bug at the
+        # source instead of relying on every downstream consumer to guard.)
+        tickers = [str(t).strip() for t in (tickers or []) if str(t).strip()]
         return tickers[: int(max_tickers)] if tickers else []
     return None
 
@@ -255,14 +265,14 @@ with tab_bo_scr:
             else:
                 st.success(f"{len(hits)} of {len(bo_tickers)} tickers match the Breakout setup.")
                 df_hits = pd.DataFrame(hits)
-                st.dataframe(df_hits, hide_index=True, use_container_width=True)
+                st.dataframe(df_hits, hide_index=True, width="stretch")
                 st.download_button(
                     "Download CSV", df_hits.to_csv(index=False).encode("utf-8"),
                     "breakout_screener.csv", "text/csv", key="bo_dl",
                 )
             if errors:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
-                    st.write(", ".join(errors))
+                    st.write(", ".join(str(e) for e in errors))
 
 # ---------------------------------------------------------------------------
 # Episodic Pivot Screener
@@ -305,14 +315,14 @@ with tab_ep_scr:
             else:
                 st.success(f"{len(hits)} of {len(ep_tickers)} tickers match the EP gap/volume setup.")
                 df_hits = pd.DataFrame(hits)
-                st.dataframe(df_hits, hide_index=True, use_container_width=True)
+                st.dataframe(df_hits, hide_index=True, width="stretch")
                 st.download_button(
                     "Download CSV", df_hits.to_csv(index=False).encode("utf-8"),
                     "ep_screener.csv", "text/csv", key="ep_dl",
                 )
             if errors:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
-                    st.write(", ".join(errors))
+                    st.write(", ".join(str(e) for e in errors))
 
 # ---------------------------------------------------------------------------
 # Parabolic Short Screener
@@ -345,14 +355,14 @@ with tab_ps_scr:
             else:
                 st.success(f"{len(hits)} of {len(ps_tickers)} tickers match the Parabolic Short setup.")
                 df_hits = pd.DataFrame(hits)
-                st.dataframe(df_hits, hide_index=True, use_container_width=True)
+                st.dataframe(df_hits, hide_index=True, width="stretch")
                 st.download_button(
                     "Download CSV", df_hits.to_csv(index=False).encode("utf-8"),
                     "parabolic_short_screener.csv", "text/csv", key="ps_dl",
                 )
             if errors:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
-                    st.write(", ".join(errors))
+                    st.write(", ".join(str(e) for e in errors))
 
 # ---------------------------------------------------------------------------
 # Breakout Calculator

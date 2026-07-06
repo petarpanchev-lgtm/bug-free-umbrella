@@ -18,6 +18,7 @@ Data is pulled in batches via yfinance's multi-ticker download, which is
 much faster and more reliable than one ticker per request.
 """
 
+import re
 import time
 
 import pandas as pd
@@ -119,7 +120,7 @@ def get_all_us_tickers():
         if "Test Issue" in nasdaq.columns:
             nasdaq = nasdaq[nasdaq["Test Issue"] == "N"]
         if "Symbol" in nasdaq.columns:
-            tickers += nasdaq["Symbol"].dropna().astype(str).tolist()
+            tickers += [str(x) for x in nasdaq["Symbol"].dropna().tolist()]
     except Exception:
         pass
 
@@ -128,20 +129,31 @@ def get_all_us_tickers():
             other = other[other["Test Issue"] == "N"]
         sym_col = "ACT Symbol" if "ACT Symbol" in other.columns else "NASDAQ Symbol"
         if sym_col in other.columns:
-            tickers += other[sym_col].dropna().astype(str).tolist()
+            tickers += [str(x) for x in other[sym_col].dropna().tolist()]
     except Exception:
         pass
 
-    # Drop footer rows (e.g. "File Creation Time...") and normalize share
-    # classes the way Yahoo Finance expects (BRK.B -> BRK-B).
+    # Drop footer rows (e.g. "File Creation Time...") and anything that
+    # doesn't look like a real ticker, and normalize share classes the way
+    # Yahoo Finance expects (BRK.B -> BRK-B). Explicitly cast + validate
+    # every entry with a strict regex -- the live Nasdaq Trader file has
+    # occasionally shown malformed/footer rows that don't match the
+    # documented column layout, so don't trust it to always be clean.
+    valid_ticker = re.compile(r"^[A-Z][A-Z0-9\-]{0,9}$")
     cleaned = []
-    for t in tickers:
-        t = t.strip()
-        if not t or t.lower() == "nan" or "file creation time" in t.lower():
+    for raw in tickers:
+        try:
+            t = str(raw).strip().upper()
+        except Exception:
             continue
-        if len(t) > 6:  # footer/garbage rows are never valid tickers
+        if not t or t == "NAN" or "FILE CREATION TIME" in t:
             continue
-        cleaned.append(t.replace(".", "-"))
+        if " " in t:
+            continue
+        t = t.replace(".", "-")
+        if not valid_ticker.match(t):
+            continue
+        cleaned.append(t)
 
     cleaned = list(dict.fromkeys(cleaned))
     return cleaned if len(cleaned) > 1000 else None
@@ -151,16 +163,16 @@ def get_all_us_tickers():
 # Batch data fetch
 # ---------------------------------------------------------------------------
 
-def batch_download(tickers, period="18mo", chunk_size=60, pause=1.0, progress_cb=None):
+def _download_chunk(chunk, period, max_retries=2, base_backoff=5.0):
     """
-    Download daily OHLCV for many tickers in chunks (faster + more reliable
-    than one ticker per request). Returns {ticker: DataFrame or None}.
-    progress_cb(done, total), if given, is called after each chunk.
+    Download one chunk via yfinance, retrying with exponential backoff if the
+    whole chunk comes back empty/errored -- which is the usual shape of a
+    Yahoo Finance rate limit (YFRateLimitError), not just a bad ticker.
+    Individual delisted/bad tickers inside an otherwise-successful chunk are
+    NOT retried here; they just come back with no data for that symbol,
+    which the caller already handles as a per-ticker miss.
     """
-    results = {}
-    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
-    done = 0
-    for chunk in chunks:
+    for attempt in range(max_retries + 1):
         try:
             data = yf.download(
                 tickers=chunk, period=period, interval="1d",
@@ -169,6 +181,32 @@ def batch_download(tickers, period="18mo", chunk_size=60, pause=1.0, progress_cb
             )
         except Exception:
             data = None
+
+        if data is not None and not data.empty:
+            return data
+
+        if attempt < max_retries:
+            time.sleep(base_backoff * (attempt + 1))  # 5s, then 10s, ...
+
+    return None
+
+
+def batch_download(tickers, period="18mo", chunk_size=40, pause=1.5, progress_cb=None):
+    """
+    Download daily OHLCV for many tickers in chunks (faster + more reliable
+    than one ticker per request). Returns {ticker: DataFrame or None}.
+    progress_cb(done, total), if given, is called after each chunk.
+
+    Defaults are deliberately conservative (smaller chunks, longer pause)
+    to reduce Yahoo Finance rate-limit errors (YFRateLimitError) that show
+    up when scanning large universes (thousands of tickers) -- a failed
+    chunk is retried with backoff before being given up on.
+    """
+    results = {}
+    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+    done = 0
+    for chunk in chunks:
+        data = _download_chunk(chunk, period)
 
         for t in chunk:
             df = None
