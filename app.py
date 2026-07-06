@@ -25,7 +25,7 @@ import streamlit as st
 import pandas as pd
 
 from kullamagi_score import fetch_data, market_regime
-from screener import get_sp500_tickers, get_nasdaq100_tickers, batch_download
+from screener import get_sp500_tickers, get_nasdaq100_tickers, get_all_us_tickers, batch_download
 from kullamagi_setups import (
     screen_breakouts, screen_episodic_pivots, screen_parabolic_shorts,
     calc_breakout_trade, calc_episodic_pivot_trade, calc_parabolic_short_trade,
@@ -100,7 +100,7 @@ def universe_picker(key_prefix):
     """Renders universe-selection widgets + a run button. Returns the
     ticker list only on the run the button was clicked, else None."""
     universe_choice = st.radio(
-        "Universe", ["S&P 500", "Nasdaq-100", "Custom list"],
+        "Universe", ["S&P 500", "Nasdaq-100", "All US Stocks (~6-8k, NASDAQ+NYSE)", "Custom list"],
         horizontal=True, key=f"{key_prefix}_universe",
     )
     custom_tickers = None
@@ -127,8 +127,10 @@ def universe_picker(key_prefix):
             custom_tickers = [t for t in re.split(r"[,\s]+", custom_input.strip()) if t]
 
     max_tickers = st.number_input(
-        "Max tickers to scan (safety cap)", min_value=10, max_value=500,
-        value=150, step=10, key=f"{key_prefix}_max",
+        "Max tickers to scan (safety cap)", min_value=10, max_value=10000,
+        value=3000, step=100, key=f"{key_prefix}_max",
+        help="Raise this to scan the full 'All US Stocks' universe (~6,000-8,000 "
+             "tickers). Larger scans take longer -- expect several minutes for 3,000+.",
     )
 
     if st.button("Fetch universe & run", type="primary", use_container_width=True, key=f"{key_prefix}_run"):
@@ -138,6 +140,15 @@ def universe_picker(key_prefix):
         elif universe_choice == "Nasdaq-100":
             with st.spinner("Fetching Nasdaq-100 list..."):
                 tickers = get_nasdaq100_tickers()
+        elif universe_choice == "All US Stocks (~6-8k, NASDAQ+NYSE)":
+            with st.spinner("Fetching full NASDAQ + NYSE symbol directory (this can take a moment)..."):
+                tickers = get_all_us_tickers()
+                if not tickers:
+                    st.error(
+                        "Couldn't fetch the full symbol directory (network issue or the "
+                        "file moved). Falling back to S&P 500 + Nasdaq-100 combined."
+                    )
+                    tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
         else:
             tickers = custom_tickers or []
         return tickers[: int(max_tickers)] if tickers else []

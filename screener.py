@@ -91,6 +91,62 @@ def get_nasdaq100_tickers():
     return syms if syms else list(_NASDAQ100_FALLBACK)
 
 
+def get_all_us_tickers():
+    """
+    Broad universe (~6,000-8,000 tickers): every common stock listed on
+    NASDAQ, NYSE, NYSE American, and NYSE Arca, pulled from Nasdaq Trader's
+    public symbol directory (nasdaqtrader.com/symboldirectory). This is the
+    only realistic way to scan 3,000+ tickers in one run -- the S&P 500 and
+    Nasdaq-100 lists top out at ~500 and ~100 respectively.
+
+    Includes ETFs (no reliable free field distinguishes common stock from ETF
+    across both files), and Test Issues are filtered out. If the live fetch
+    fails (no internet, file moved), returns None -- the caller should fall
+    back to S&P 500 + Nasdaq-100 combined, or a custom list.
+    """
+    try:
+        nasdaq = pd.read_csv(
+            "https://ftp.nasdaqtrader.com/symboldirectory/nasdaqlisted.txt", sep="|"
+        )
+        other = pd.read_csv(
+            "https://ftp.nasdaqtrader.com/symboldirectory/otherlisted.txt", sep="|"
+        )
+    except Exception:
+        return None
+
+    tickers = []
+    try:
+        if "Test Issue" in nasdaq.columns:
+            nasdaq = nasdaq[nasdaq["Test Issue"] == "N"]
+        if "Symbol" in nasdaq.columns:
+            tickers += nasdaq["Symbol"].dropna().astype(str).tolist()
+    except Exception:
+        pass
+
+    try:
+        if "Test Issue" in other.columns:
+            other = other[other["Test Issue"] == "N"]
+        sym_col = "ACT Symbol" if "ACT Symbol" in other.columns else "NASDAQ Symbol"
+        if sym_col in other.columns:
+            tickers += other[sym_col].dropna().astype(str).tolist()
+    except Exception:
+        pass
+
+    # Drop footer rows (e.g. "File Creation Time...") and normalize share
+    # classes the way Yahoo Finance expects (BRK.B -> BRK-B).
+    cleaned = []
+    for t in tickers:
+        t = t.strip()
+        if not t or t.lower() == "nan" or "file creation time" in t.lower():
+            continue
+        if len(t) > 6:  # footer/garbage rows are never valid tickers
+            continue
+        cleaned.append(t.replace(".", "-"))
+
+    cleaned = list(dict.fromkeys(cleaned))
+    return cleaned if len(cleaned) > 1000 else None
+
+
 # ---------------------------------------------------------------------------
 # Batch data fetch
 # ---------------------------------------------------------------------------
