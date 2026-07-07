@@ -29,8 +29,10 @@ much faster and more reliable than one ticker per request.
 import os
 import re
 import time
+from io import StringIO
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 from kullamagi_score import score_breakout_fit, fetch_data, market_regime
@@ -71,12 +73,28 @@ _COMMON_STOCK_CSV_PATH = os.path.join(
 )
 
 
+# Wikipedia (and many sites) reject requests with no User-Agent -- pandas'
+# pd.read_html(url) sends none, which Wikipedia's servers often 403 when the
+# request comes from a cloud host (e.g. Streamlit Community Cloud), silently
+# forcing every caller onto the small hardcoded fallback lists below. Fetching
+# the HTML ourselves with a browser-like User-Agent first, then handing the
+# text to pd.read_html, avoids that.
+_WIKI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+
 def _read_wikipedia_tickers(url, symbol_col_candidates):
     """Try to fetch a ticker table from Wikipedia. Returns a list of ticker
     strings, or None if the fetch/parse fails for any reason (no internet,
     page structure changed, etc.)."""
     try:
-        tables = pd.read_html(url)
+        resp = requests.get(url, headers=_WIKI_HEADERS, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
     except Exception:
         return None
     for t in tables:
@@ -119,6 +137,10 @@ def get_all_us_tickers():
     across both files), and Test Issues are filtered out. If the live fetch
     fails (no internet, file moved), returns None -- the caller should fall
     back to get_common_stocks_from_csv(), S&P 500 + Nasdaq-100, or a custom list.
+
+    Not exposed as a manual-scan option in the app anymore (superseded by the
+    faster, more reliable "Common Stocks (bundled list)" option) -- still used
+    by daily_screen.py as the first tier of its universe fallback chain.
     """
     try:
         nasdaq = pd.read_csv(

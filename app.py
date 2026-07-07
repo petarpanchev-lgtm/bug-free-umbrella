@@ -29,7 +29,6 @@ from kullamagi_score import fetch_data, market_regime
 from screener import (
     get_sp500_tickers,
     get_nasdaq100_tickers,
-    get_all_us_tickers,
     get_common_stocks_from_csv,
     batch_download,
 )
@@ -193,15 +192,13 @@ def universe_picker(key_prefix):
         [
             "S&P 500",
             "Nasdaq-100",
-            "All US Stocks (~6-8k, NASDAQ+NYSE)",
             "Common Stocks (bundled list)",
             "Custom list",
         ],
         horizontal=True, key=f"{key_prefix}_universe",
-        help="'Common Stocks (bundled list)' reads a local CSV of every NASDAQ/NYSE "
-             "common stock (no ETFs), refreshed weekly -- faster and more reliable than "
-             "'All US Stocks' since it skips the live symbol-directory fetch, at the cost "
-             "of being up to a week stale on brand-new listings.",
+        help="'Common Stocks (bundled list)' scans every NASDAQ/NYSE common stock "
+             "(~4,000 tickers, no ETFs) from a local CSV refreshed weekly -- no live "
+             "symbol-directory fetch needed, so it's fast and reliable.",
     )
     custom_tickers = None
     if universe_choice == "Custom list":
@@ -229,11 +226,11 @@ def universe_picker(key_prefix):
     max_tickers = st.number_input(
         "Max tickers to scan (safety cap)", min_value=10, max_value=10000,
         value=3000, step=100, key=f"{key_prefix}_max",
-        help="Raise this to scan the full 'All US Stocks' universe (~6,000-8,000 "
-             "tickers). Larger scans take longer -- expect several minutes for 3,000+, "
-             "and Yahoo Finance may rate-limit very large scans (the app retries failed "
-             "batches automatically, but if you keep seeing rate-limit errors, lower this "
-             "number or try again in a few minutes).",
+        help="Raise this to scan the full 'Common Stocks (bundled list)' universe "
+             "(~4,000 tickers). Larger scans take longer -- expect several minutes "
+             "for 3,000+, and Yahoo Finance may rate-limit very large scans (the app "
+             "retries failed batches automatically, but if you keep seeing rate-limit "
+             "errors, lower this number or try again in a few minutes).",
     )
 
     if st.button("Fetch universe & run", type="primary", width="stretch", key=f"{key_prefix}_run"):
@@ -243,15 +240,6 @@ def universe_picker(key_prefix):
         elif universe_choice == "Nasdaq-100":
             with st.spinner("Fetching Nasdaq-100 list..."):
                 tickers = get_nasdaq100_tickers()
-        elif universe_choice == "All US Stocks (~6-8k, NASDAQ+NYSE)":
-            with st.spinner("Fetching full NASDAQ + NYSE symbol directory (this can take a moment)..."):
-                tickers = get_all_us_tickers()
-                if not tickers:
-                    st.error(
-                        "Couldn't fetch the full symbol directory (network issue or the "
-                        "file moved). Falling back to S&P 500 + Nasdaq-100 combined."
-                    )
-                    tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
         elif universe_choice == "Common Stocks (bundled list)":
             with st.spinner("Loading bundled common-stock list..."):
                 tickers = get_common_stocks_from_csv()
