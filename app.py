@@ -26,7 +26,13 @@ import streamlit as st
 import pandas as pd
 
 from kullamagi_score import fetch_data, market_regime
-from screener import get_sp500_tickers, get_nasdaq100_tickers, get_all_us_tickers, batch_download
+from screener import (
+    get_sp500_tickers,
+    get_nasdaq100_tickers,
+    get_all_us_tickers,
+    get_common_stocks_from_csv,
+    batch_download,
+)
 from kullamagi_setups import (
     screen_breakouts, screen_episodic_pivots, screen_parabolic_shorts,
     calc_breakout_trade, calc_episodic_pivot_trade, calc_parabolic_short_trade,
@@ -183,8 +189,19 @@ def universe_picker(key_prefix):
     """Renders universe-selection widgets + a run button. Returns the
     ticker list only on the run the button was clicked, else None."""
     universe_choice = st.radio(
-        "Universe", ["S&P 500", "Nasdaq-100", "All US Stocks (~6-8k, NASDAQ+NYSE)", "Custom list"],
+        "Universe",
+        [
+            "S&P 500",
+            "Nasdaq-100",
+            "All US Stocks (~6-8k, NASDAQ+NYSE)",
+            "Common Stocks (bundled list)",
+            "Custom list",
+        ],
         horizontal=True, key=f"{key_prefix}_universe",
+        help="'Common Stocks (bundled list)' reads a local CSV of every NASDAQ/NYSE "
+             "common stock (no ETFs), refreshed weekly -- faster and more reliable than "
+             "'All US Stocks' since it skips the live symbol-directory fetch, at the cost "
+             "of being up to a week stale on brand-new listings.",
     )
     custom_tickers = None
     if universe_choice == "Custom list":
@@ -233,6 +250,15 @@ def universe_picker(key_prefix):
                     st.error(
                         "Couldn't fetch the full symbol directory (network issue or the "
                         "file moved). Falling back to S&P 500 + Nasdaq-100 combined."
+                    )
+                    tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
+        elif universe_choice == "Common Stocks (bundled list)":
+            with st.spinner("Loading bundled common-stock list..."):
+                tickers = get_common_stocks_from_csv()
+                if not tickers:
+                    st.error(
+                        "Couldn't read the bundled common-stock CSV (file missing or "
+                        "unreadable). Falling back to S&P 500 + Nasdaq-100 combined."
                     )
                     tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
         else:
