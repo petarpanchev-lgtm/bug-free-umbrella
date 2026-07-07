@@ -12,12 +12,21 @@ Universe sources:
     (e.g. no internet, or Wikipedia's page structure changes). The fallback
     lists are NOT guaranteed to be current -- they exist purely so the
     screener still works if the live fetch breaks.
+  - All US Stocks: fetched live from Nasdaq Trader's symbol directory
+    (includes ETFs -- no reliable field distinguishes them across both
+    source files at that layer).
+  - Common Stocks (bundled CSV): nasdaq_nyse_common_stock.csv, a local file
+    checked into the repo, refreshed periodically by export_universe.py /
+    its GitHub Actions workflow. Individual common stocks only (ETFs
+    excluded), no network call needed to read it -- fast and reliable, and
+    used as the fallback for daily_screen.py if the live fetch fails.
   - Custom: any list of tickers you provide (pasted or uploaded as CSV).
 
 Data is pulled in batches via yfinance's multi-ticker download, which is
 much faster and more reliable than one ticker per request.
 """
 
+import os
 import re
 import time
 
@@ -54,6 +63,12 @@ _NASDAQ100_FALLBACK = [
     "LRCX", "MDLZ", "KLAC", "SNPS", "CDNS", "MAR", "PYPL", "ORLY", "CTAS", "ABNB",
     "MELI", "ASML", "CRWD", "FTNT", "ADP", "NXPI", "MRVL", "PCAR", "CSX", "MNST",
 ]
+
+# Local, network-free universe source. Kept in sync by export_universe.py
+# (see .github/workflows/update_common_stock_list.yml, weekly + on-demand).
+_COMMON_STOCK_CSV_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "nasdaq_nyse_common_stock.csv"
+)
 
 
 def _read_wikipedia_tickers(url, symbol_col_candidates):
@@ -103,7 +118,7 @@ def get_all_us_tickers():
     Includes ETFs (no reliable free field distinguishes common stock from ETF
     across both files), and Test Issues are filtered out. If the live fetch
     fails (no internet, file moved), returns None -- the caller should fall
-    back to S&P 500 + Nasdaq-100 combined, or a custom list.
+    back to get_common_stocks_from_csv(), S&P 500 + Nasdaq-100, or a custom list.
     """
     try:
         nasdaq = pd.read_csv(
@@ -139,6 +154,10 @@ def get_all_us_tickers():
     # every entry with a strict regex -- the live Nasdaq Trader file has
     # occasionally shown malformed/footer rows that don't match the
     # documented column layout, so don't trust it to always be clean.
+    #
+    # Note: no "== NAN" string check here -- there's a real ticker, NAN
+    # (Nuveen New York Quality Municipal Income Fund), and dropna() above
+    # already removed any genuinely missing values before this loop runs.
     valid_ticker = re.compile(r"^[A-Z][A-Z0-9\-]{0,9}$")
     cleaned = []
     for raw in tickers:
@@ -146,7 +165,7 @@ def get_all_us_tickers():
             t = str(raw).strip().upper()
         except Exception:
             continue
-        if not t or t == "NAN" or "FILE CREATION TIME" in t:
+        if not t or "FILE CREATION TIME" in t:
             continue
         if " " in t:
             continue
@@ -157,6 +176,55 @@ def get_all_us_tickers():
 
     cleaned = list(dict.fromkeys(cleaned))
     return cleaned if len(cleaned) > 1000 else None
+
+
+def get_common_stocks_from_csv(path=None):
+    """
+    Reads the bundled nasdaq_nyse_common_stock.csv -- individual common
+    stocks only (ETFs excluded), NASDAQ + NYSE + NYSE American/Arca. This is
+    a local file read, NOT a network call, so it works even if Yahoo Finance
+    or Nasdaq Trader's site is unreachable/rate-limiting that moment.
+
+    Kept fresh by export_universe.py, run weekly (and on-demand) via
+    .github/workflows/update_common_stock_list.yml.
+
+    Returns a list of tickers, or None if the file is missing/unreadable
+    (e.g. running screener.py somewhere it wasn't deployed alongside the CSV)
+    -- callers should treat that the same as any other universe-fetch failure.
+    """
+    csv_path = path or _COMMON_STOCK_CSV_PATH
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception:
+        return None
+
+    if "Symbol" not in df.columns:
+        return None
+
+    if "ETF" in df.columns:
+        df = df[df["ETF"] != "Y"]  # defensive -- file should already be all "N"
+
+    # Note: no "== NAN" string check here either, for the same reason as
+    # get_all_us_tickers -- NAN is a real ticker, and dropna() below already
+    # removes genuinely missing Symbol values.
+    valid_ticker = re.compile(r"^[A-Z][A-Z0-9\-]{0,9}$")
+    cleaned = []
+    for raw in df["Symbol"].dropna().tolist():
+        try:
+            t = str(raw).strip().upper()
+        except Exception:
+            continue
+        if not t:
+            continue
+        if " " in t:
+            continue
+        t = t.replace(".", "-")  # BRK.A -> BRK-A, matching Yahoo Finance's convention
+        if not valid_ticker.match(t):
+            continue
+        cleaned.append(t)
+
+    cleaned = list(dict.fromkeys(cleaned))
+    return cleaned if cleaned else None
 
 
 # ---------------------------------------------------------------------------

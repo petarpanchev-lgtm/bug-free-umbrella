@@ -24,9 +24,12 @@ Files in this folder:
 - `app.py` — the Streamlit UI (all 6 tools, plus a manual "run the daily screener now" trigger)
 - `kullamagi_setups.py` — the setup-specific screener/calculator logic, with book citations in the docstrings
 - `kullamagi_score.py` — shared helpers (`fetch_data`, `market_regime`) plus the original blended 0-100 fit score (superseded by the dedicated tools above, kept for reference)
-- `screener.py` — ticker universe fetchers (S&P 500 / Nasdaq-100 via Wikipedia, "All US Stocks" via the Nasdaq Trader symbol directory, with offline fallbacks) + batch price download
+- `screener.py` — ticker universe fetchers: S&P 500 / Nasdaq-100 (via Wikipedia, with offline fallbacks), "All US Stocks" (live from the Nasdaq Trader symbol directory), and "Common Stocks (bundled list)" (reads the local `nasdaq_nyse_common_stock.csv`, no network call) — plus batch price download
+- `nasdaq_nyse_common_stock.csv` — bundled snapshot of every individual common stock (ETFs excluded) on NASDAQ/NYSE/NYSE American/NYSE Arca; see "Keeping the common-stock list updated" below
+- `export_universe.py` — refreshes `nasdaq_nyse_common_stock.csv` from Nasdaq Trader's live symbol directory
 - `daily_screen.py` — standalone (non-Streamlit) script that runs all 3 screeners against the full universe once and logs changes to `screener_history.xlsx`; see "Daily Automated Screener" below
 - `.github/workflows/daily_screener.yml` — the GitHub Actions workflow that runs `daily_screen.py` on a schedule
+- `.github/workflows/update_common_stock_list.yml` — the GitHub Actions workflow that runs `export_universe.py` weekly to keep the bundled CSV current
 - `requirements.txt` — dependencies
 
 ## Run it locally first (optional, to confirm it works)
@@ -93,8 +96,12 @@ server management, no credit card, free for public apps.
 
 1. Pick a universe: **S&P 500** or **Nasdaq-100** (fetched live from
    Wikipedia each run, with an offline fallback list if that fetch fails),
-   or **Custom list** (paste tickers or upload a CSV with a `Ticker`/`Symbol`
-   column).
+   **All US Stocks** (fetched live from the Nasdaq Trader symbol directory),
+   **Common Stocks (bundled list)** (reads `nasdaq_nyse_common_stock.csv`
+   straight from the repo — no live fetch, so it's faster and immune to
+   that site being briefly down, at the cost of being up to a week stale;
+   see "Keeping the common-stock list updated" below), or **Custom list**
+   (paste tickers or upload a CSV with a `Ticker`/`Symbol` column).
 2. Adjust the setup-specific sliders if you want (defaults match the book's
    own numbers where the book gives one — e.g. EP gap ≥10%, Parabolic Short
    A+ ≥300% over 3-5 days).
@@ -129,6 +136,40 @@ Important limitations, by design:
    bars for the exact entry/stop the book describes; if that data isn't
    available, they fall back to today's daily open/low or high and say so.
 
+## Keeping the common-stock list updated
+
+`nasdaq_nyse_common_stock.csv` is a snapshot -- every individual common
+stock (ETFs excluded) listed on NASDAQ, NYSE, NYSE American, and NYSE Arca,
+sourced from Nasdaq Trader's public symbol directory. Stock listings change
+(new IPOs, delistings, ticker changes), so this file needs periodic
+refreshing to stay accurate. Three things read it:
+
+- The app's **Common Stocks (bundled list)** universe option (manual scans).
+- `daily_screen.py`'s fallback chain: it tries the live "All US Stocks" fetch
+  first, falls back to this CSV if that fails, and only falls back further to
+  the small S&P 500 + Nasdaq-100 combined list if the CSV itself is somehow
+  missing or unreadable.
+
+**Keeping it fresh** -- `.github/workflows/update_common_stock_list.yml` runs
+`export_universe.py` automatically every Saturday at 12:00 UTC (markets
+closed, quiet time) and commits the refreshed CSV back to the repo if
+anything changed. No setup needed beyond having this workflow file pushed to
+your repo -- same "just needs to exist under `.github/workflows/`" mechanism
+as the daily screener.
+
+**Running it manually**, e.g. right after a big batch of new listings: repo
+-> **Actions** tab -> "Update Common Stock List" -> **Run workflow**. (It
+doesn't have its own button in the app the way the daily screener does --
+add one the same way if you want that, see `trigger_github_workflow()` in
+`app.py` for the pattern.)
+
+**Running it locally** (needs real internet access, so it won't work from a
+sandboxed environment, but will from your own machine):
+```bash
+python export_universe.py
+```
+This overwrites `nasdaq_nyse_common_stock.csv` in place with a fresh pull.
+
 ## Daily Automated Screener (GitHub Actions)
 
 `daily_screen.py` + `.github/workflows/daily_screener.yml` run all 3 screeners
@@ -137,6 +178,11 @@ the only part of this whole setup with guaranteed, unrestricted internet
 access on a fixed schedule. Results are logged to `screener_history.xlsx` at
 the repo root, one sheet per setup, tracking only what CHANGED (newly added
 or dropped tickers) instead of rewriting the whole list every day.
+
+Universe used: live "All US Stocks" fetch first, falling back to the bundled
+`nasdaq_nyse_common_stock.csv` if that fails, falling back further to S&P 500
++ Nasdaq-100 combined only if the CSV itself is unavailable -- see "Keeping
+the common-stock list updated" above.
 
 ### Enabling it
 No separate "enable" step -- just make sure both of these are pushed to your

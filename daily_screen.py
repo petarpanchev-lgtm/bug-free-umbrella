@@ -36,7 +36,13 @@ import sys
 
 from openpyxl import Workbook, load_workbook
 
-from screener import get_sp500_tickers, get_nasdaq100_tickers, get_all_us_tickers, batch_download
+from screener import (
+    get_sp500_tickers,
+    get_nasdaq100_tickers,
+    get_all_us_tickers,
+    get_common_stocks_from_csv,
+    batch_download,
+)
 from kullamagi_setups import screen_breakouts, screen_episodic_pivots, screen_parabolic_shorts
 
 HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screener_history.xlsx")
@@ -45,11 +51,24 @@ SETUPS = ["Breakout", "EP", "Parabolic Short"]
 
 
 def get_universe():
-    """Full NYSE+NASDAQ universe, falling back to S&P 500 + Nasdaq-100
-    combined if the live symbol-directory fetch fails for any reason."""
+    """Full NYSE+NASDAQ universe, with a two-stage fallback if the live
+    symbol-directory fetch fails for any reason:
+      1. Live fetch from Nasdaq Trader (get_all_us_tickers) -- freshest,
+         includes brand-new listings, but depends on that site being up.
+      2. Local nasdaq_nyse_common_stock.csv (get_common_stocks_from_csv) --
+         no network call, kept fresh weekly by
+         .github/workflows/update_common_stock_list.yml, so it's a much
+         bigger and more current safety net than the old S&P 500 +
+         Nasdaq-100 fallback.
+      3. S&P 500 + Nasdaq-100 combined -- final safety net if even the
+         bundled CSV is missing or unreadable.
+    """
     tickers = get_all_us_tickers()
     if not tickers:
-        print("Full universe fetch failed -- falling back to S&P 500 + Nasdaq-100 combined.", file=sys.stderr)
+        print("Full universe fetch failed -- falling back to bundled common-stock CSV.", file=sys.stderr)
+        tickers = get_common_stocks_from_csv()
+    if not tickers:
+        print("Bundled CSV fallback unavailable -- falling back to S&P 500 + Nasdaq-100 combined.", file=sys.stderr)
         tickers = list(dict.fromkeys(get_sp500_tickers() + get_nasdaq100_tickers()))
     return tickers
 
