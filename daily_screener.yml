@@ -1,0 +1,53 @@
+name: Daily Kullamagi Screener
+
+# Runs the 3 book-only screeners (Breakout, EP, Parabolic Short) against the
+# full NYSE+NASDAQ universe once a day and commits the changes (added/dropped
+# tickers, or the initial list on the very first run) to screener_history.xlsx.
+#
+# This has to run here (GitHub's servers), not in a Streamlit Cloud app or in
+# a chat-agent sandbox, because it needs real, unrestricted internet access to
+# Yahoo Finance and the Nasdaq Trader symbol directory.
+#
+# Schedule note: cron below is in UTC. 21:30 UTC is after the 4pm ET US
+# market close whether it's EDT (UTC-4) or EST (UTC-5) -- adjust the cron
+# expression below if you'd rather it run at a different time. GitHub does
+# not guarantee scheduled workflows fire at the exact minute, especially
+# during high load; a few minutes' delay is normal.
+
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"   # 21:30 UTC, Monday-Friday
+  workflow_dispatch: {}         # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  daily-screen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily screener
+        run: python daily_screen.py
+
+      - name: Commit and push changes (if any)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add screener_history.xlsx
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Daily screener update: $(date -u +%Y-%m-%d)"
+            git push
+          fi
