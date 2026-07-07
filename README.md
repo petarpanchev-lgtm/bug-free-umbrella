@@ -21,10 +21,12 @@ in-app "Book citations behind these tools" expander, or the docstrings in
 See the main `Kullamagi_Trading_Playbook.docx` for the full narrative rule set.
 
 Files in this folder:
-- `app.py` — the Streamlit UI (all 6 tools)
+- `app.py` — the Streamlit UI (all 6 tools, plus a manual "run the daily screener now" trigger)
 - `kullamagi_setups.py` — the setup-specific screener/calculator logic, with book citations in the docstrings
 - `kullamagi_score.py` — shared helpers (`fetch_data`, `market_regime`) plus the original blended 0-100 fit score (superseded by the dedicated tools above, kept for reference)
-- `screener.py` — ticker universe fetchers (S&P 500 / Nasdaq-100 via Wikipedia, with an offline fallback list) + batch price download
+- `screener.py` — ticker universe fetchers (S&P 500 / Nasdaq-100 via Wikipedia, "All US Stocks" via the Nasdaq Trader symbol directory, with offline fallbacks) + batch price download
+- `daily_screen.py` — standalone (non-Streamlit) script that runs all 3 screeners against the full universe once and logs changes to `screener_history.xlsx`; see "Daily Automated Screener" below
+- `.github/workflows/daily_screener.yml` — the GitHub Actions workflow that runs `daily_screen.py` on a schedule
 - `requirements.txt` — dependencies
 
 ## Run it locally first (optional, to confirm it works)
@@ -126,6 +128,68 @@ Important limitations, by design:
 4. The EP and Parabolic Short calculators try to pull real 5-minute intraday
    bars for the exact entry/stop the book describes; if that data isn't
    available, they fall back to today's daily open/low or high and say so.
+
+## Daily Automated Screener (GitHub Actions)
+
+`daily_screen.py` + `.github/workflows/daily_screener.yml` run all 3 screeners
+against the full NYSE+NASDAQ universe once a day on GitHub's own servers --
+the only part of this whole setup with guaranteed, unrestricted internet
+access on a fixed schedule. Results are logged to `screener_history.xlsx` at
+the repo root, one sheet per setup, tracking only what CHANGED (newly added
+or dropped tickers) instead of rewriting the whole list every day.
+
+### Enabling it
+No separate "enable" step -- just make sure both of these are pushed to your
+repo:
+- `daily_screen.py`
+- `.github/workflows/daily_screener.yml` (must be at exactly this path,
+  including the `.github/workflows/` folder)
+
+GitHub automatically picks up any workflow file under `.github/workflows/`.
+It runs weekdays at 21:30 UTC (after the US market close whether it's EDT or
+EST) -- edit the `cron:` line in the workflow file to change the time.
+
+### Running it manually
+Two ways to trigger a run without waiting for the schedule:
+
+1. **From GitHub**: repo → **Actions** tab → "Daily Kullamagi Screener" →
+   **Run workflow**.
+2. **From the app itself**: expand "Manual trigger: run the daily screener
+   now" near the top of the page and click **Run workflow now**. This calls
+   GitHub's API directly, so you don't have to leave the app. To use this
+   button, give the app a GitHub token first:
+
+   a. Create a fine-grained personal access token at
+      https://github.com/settings/personal-access-tokens/new
+      - Under "Repository access", choose "Only select repositories" and
+        pick this repo.
+      - Under "Permissions" → "Repository permissions", set **Actions** to
+        **Read and write**.
+      - Generate the token and copy it (GitHub only shows it once).
+
+   b. Add it to your Streamlit app's secrets: on share.streamlit.io, open
+      your app → the "⋮" menu → **Settings** → **Secrets**, then add:
+      ```toml
+      GITHUB_TOKEN = "github_pat_..."
+      GITHUB_REPO_OWNER = "your-github-username"
+      GITHUB_REPO_NAME = "kullamagi-tools"
+      ```
+      (use your actual username/repo name; `GITHUB_BRANCH` is optional and
+      defaults to `main`). Save -- the app restarts automatically with the
+      secrets available.
+
+   Never commit the token to the repo itself. Streamlit secrets are kept
+   separate from your code for exactly this reason.
+
+### Reading the results
+Open `screener_history.xlsx` from the repo. Each sheet (`Breakout`, `EP`,
+`Parabolic Short`) has three columns: `Date`, `Ticker`, `Status`. The first
+run for a setup logs every current hit as `Initial`; every run after that
+only adds a row when a ticker newly qualifies (`Added`) or stops qualifying
+(`Dropped`) -- tickers still flagged from the day before get no new row, so
+the log stays short over time. To see what's currently flagged as of any
+date, replay the rows top to bottom (Initial/Added → in the set, Dropped →
+out of the set).
 
 ## Disclaimer
 Educational tool only, not financial advice. Not affiliated with or endorsed
