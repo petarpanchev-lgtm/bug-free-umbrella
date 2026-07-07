@@ -21,6 +21,7 @@ threshold used here. Deploy on Streamlit Community Cloud (see README.md).
 
 import re
 
+import requests
 import streamlit as st
 import pandas as pd
 
@@ -68,6 +69,88 @@ with st.expander("Book citations behind these tools", expanded=False):
 - *"Typically, I will risk 0.5% or less of my account size per trade, but I may risk up to a maximum of 1% on some trades."*
         """
     )
+
+def trigger_github_workflow():
+    """
+    Manually triggers the daily_screener.yml GitHub Actions workflow via the
+    GitHub REST API (a workflow_dispatch event), instead of waiting for its
+    scheduled 21:30 UTC run.
+
+    Requires three Streamlit secrets to be set (app -> Settings -> Secrets on
+    Streamlit Community Cloud -- see README.md for how to create the token):
+      GITHUB_TOKEN       - a fine-grained PAT scoped to this repo with
+                            "Actions: Read and write" permission
+      GITHUB_REPO_OWNER  - your GitHub username or org
+      GITHUB_REPO_NAME   - the repo name (e.g. "kullamagi-tools")
+    Optional:
+      GITHUB_BRANCH      - defaults to "main"
+
+    Returns (success: bool, message: str). Never logs or displays the token
+    itself.
+    """
+    token = st.secrets.get("GITHUB_TOKEN")
+    owner = st.secrets.get("GITHUB_REPO_OWNER")
+    repo = st.secrets.get("GITHUB_REPO_NAME")
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+
+    missing = [
+        name for name, val in
+        [("GITHUB_TOKEN", token), ("GITHUB_REPO_OWNER", owner), ("GITHUB_REPO_NAME", repo)]
+        if not val
+    ]
+    if missing:
+        return False, (
+            "Missing Streamlit secret(s): " + ", ".join(missing) + ". Add them under "
+            "this app's Settings -> Secrets on Streamlit Community Cloud (see README.md "
+            "for how to create the GitHub token)."
+        )
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/daily_screener.yml/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        resp = requests.post(url, headers=headers, json={"ref": branch}, timeout=15)
+    except Exception as e:
+        return False, f"Request to GitHub failed: {e}"
+
+    if resp.status_code == 204:
+        return True, (
+            "Workflow run triggered! It usually takes a few seconds to appear -- check "
+            f"the Actions tab at https://github.com/{owner}/{repo}/actions for progress."
+        )
+    elif resp.status_code == 404:
+        return False, (
+            "GitHub returned 404 -- double-check GITHUB_REPO_OWNER/GITHUB_REPO_NAME, that "
+            "daily_screener.yml is pushed to the branch in GITHUB_BRANCH, and that the "
+            "token has access to this repo."
+        )
+    elif resp.status_code in (401, 403):
+        return False, (
+            f"GitHub returned {resp.status_code} -- the token is invalid, expired, or "
+            "doesn't have 'Actions: write' permission on this repo."
+        )
+    else:
+        return False, f"GitHub API error {resp.status_code}: {resp.text[:300]}"
+
+
+with st.expander("Manual trigger: run the daily screener now (GitHub Actions)", expanded=False):
+    st.caption(
+        "The daily scan normally runs automatically on GitHub's schedule (see "
+        "daily_screener.yml, 21:30 UTC on weekdays). Use this button to kick off an "
+        "extra run right now instead of waiting -- handy right after deploying, or "
+        "whenever you want a fresh scan. Requires GITHUB_TOKEN, GITHUB_REPO_OWNER, and "
+        "GITHUB_REPO_NAME to be set in this app's secrets (see README.md)."
+    )
+    if st.button("▶️ Run workflow now", type="primary"):
+        with st.spinner("Triggering GitHub Actions workflow..."):
+            ok, msg = trigger_github_workflow()
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
 
 tabs = st.tabs([
     "🟢 Breakout Screener", "🚀 EP Screener", "🔻 Parabolic Short Screener",
