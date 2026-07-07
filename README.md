@@ -21,10 +21,10 @@ in-app "Book citations behind these tools" expander, or the docstrings in
 See the main `Kullamagi_Trading_Playbook.docx` for the full narrative rule set.
 
 Files in this folder:
-- `app.py` — the Streamlit UI (all 6 tools, plus a manual "run the daily screener now" trigger)
+- `app.py` — the Streamlit UI, laid out as a two-step workflow: **Step 1** (top row) picks a strategy and screens a universe for candidates; **Step 2** (bottom row) takes a ticker and calculates its entry/stop/position size. Also has a manual "run the daily screener now" trigger.
 - `kullamagi_setups.py` — the setup-specific screener/calculator logic, with book citations in the docstrings
 - `kullamagi_score.py` — shared helpers (`fetch_data`, `market_regime`) plus the original blended 0-100 fit score (superseded by the dedicated tools above, kept for reference)
-- `screener.py` — ticker universe fetchers: S&P 500 / Nasdaq-100 (via Wikipedia, with offline fallbacks), "All US Stocks" (live from the Nasdaq Trader symbol directory), and "Common Stocks (bundled list)" (reads the local `nasdaq_nyse_common_stock.csv`, no network call) — plus batch price download
+- `screener.py` — ticker universe fetchers: S&P 500 / Nasdaq-100 (via Wikipedia, with offline fallbacks), "All NYSE and NASDAQ common stocks" (reads the local `nasdaq_nyse_common_stock.csv`, no network call), plus `get_all_us_tickers()` (live from the Nasdaq Trader symbol directory, used internally by the daily automated screener's fallback chain, not exposed as a manual option) — plus batch price download
 - `nasdaq_nyse_common_stock.csv` — bundled snapshot of every individual common stock (ETFs excluded) on NASDAQ/NYSE/NYSE American/NYSE Arca; see "Keeping the common-stock list updated" below
 - `export_universe.py` — refreshes `nasdaq_nyse_common_stock.csv` from Nasdaq Trader's live symbol directory
 - `daily_screen.py` — standalone (non-Streamlit) script that runs all 3 screeners against the full universe once and logs changes to `screener_history.xlsx`; see "Daily Automated Screener" below
@@ -92,23 +92,31 @@ server management, no credit card, free for public apps.
   any host that supports Python web apps (Render, Railway, Fly.io, etc.) —
   the command to run is `streamlit run app.py --server.port $PORT --server.address 0.0.0.0`.
 
-## Using the Screeners
+## Using the app: a two-step workflow
 
-1. Pick a universe: **S&P 500** or **Nasdaq-100** (fetched live from
+The page is laid out top to bottom as two steps, each its own row with its
+own strategy selector — screen first, then calculate:
+
+### Step 1 (top row) — Select a strategy and scan
+
+1. Pick which setup to screen for: **Breakout / Momentum Burst**, **Episodic
+   Pivot (EP)**, or **Parabolic Short**.
+2. Pick a universe: **S&P 500** or **Nasdaq-100** (fetched live from
    Wikipedia each run, with an offline fallback list if that fetch fails),
-   **All US Stocks** (fetched live from the Nasdaq Trader symbol directory),
-   **Common Stocks (bundled list)** (reads `nasdaq_nyse_common_stock.csv`
-   straight from the repo — no live fetch, so it's faster and immune to
-   that site being briefly down, at the cost of being up to a week stale;
-   see "Keeping the common-stock list updated" below), or **Custom list**
-   (paste tickers or upload a CSV with a `Ticker`/`Symbol` column).
-2. Adjust the setup-specific sliders if you want (defaults match the book's
+   **All NYSE and NASDAQ common stocks (3963 tickers)** (reads
+   `nasdaq_nyse_common_stock.csv` straight from the repo — no live fetch, so
+   it's faster and immune to that site being briefly down, at the cost of
+   being up to a week stale; the exact count drifts slightly as the weekly
+   refresh runs — see "Keeping the common-stock list updated" below), or
+   **Custom list** (paste tickers or upload a CSV with a `Ticker`/`Symbol`
+   column).
+3. Adjust the setup-specific sliders if you want (defaults match the book's
    own numbers where the book gives one — e.g. EP gap ≥10%, Parabolic Short
    A+ ≥300% over 3-5 days).
-3. Set a **max tickers to scan** safety cap and click **Fetch universe & run**.
+4. Set a **max tickers to scan** safety cap and click **Fetch universe & run**.
    Tickers download in batches with a progress bar. Only tickers meeting
    **all** of that setup's conditions are shown, with a CSV download button.
-4. The Breakout and EP screeners show the market-environment banner (SPY
+5. The Breakout and EP screeners show the market-environment banner (SPY
    10-day vs. 20-day MA) once at the top — book: only take those two setups
    in a favorable environment. Parabolic Short is market-agnostic per the
    book, so no banner there.
@@ -123,10 +131,14 @@ Important limitations, by design:
 - Tickers with too little history, or that fail to download, are skipped and
   listed in a collapsed "skipped" section rather than breaking the whole scan.
 
-## Using the Calculators
+### Step 2 (bottom row) — Calculate trade parameters
 
-1. Type in a ticker, set your account size and risk % (book: 0.5% typical,
-   1% max), and any setup-specific check thresholds.
+Once you've got a candidate ticker — from Step 1 above, or one you already
+have in mind — drop down to the second row to work out the actual trade:
+
+1. Pick the matching strategy, type in the ticker, set your account size and
+   risk % (book: 0.5% typical, 1% max), and any setup-specific check
+   thresholds.
 2. Click **Calculate**. You'll get the entry, stop, risk per share, position
    size (shares, $ value, % of account), and 1R/2R/3R targets.
 3. Warnings appear inline if a condition fails — e.g. the Breakout stop is
@@ -144,11 +156,12 @@ sourced from Nasdaq Trader's public symbol directory. Stock listings change
 (new IPOs, delistings, ticker changes), so this file needs periodic
 refreshing to stay accurate. Three things read it:
 
-- The app's **Common Stocks (bundled list)** universe option (manual scans).
-- `daily_screen.py`'s fallback chain: it tries the live "All US Stocks" fetch
-  first, falls back to this CSV if that fails, and only falls back further to
-  the small S&P 500 + Nasdaq-100 combined list if the CSV itself is somehow
-  missing or unreadable.
+- The app's **All NYSE and NASDAQ common stocks** universe option (manual
+  scans, Step 1).
+- `daily_screen.py`'s fallback chain: it tries the live full-symbol-directory
+  fetch first, falls back to this CSV if that fails, and only falls back
+  further to the small S&P 500 + Nasdaq-100 combined list if the CSV itself
+  is somehow missing or unreadable.
 
 **Keeping it fresh** -- `.github/workflows/update_common_stock_list.yml` runs
 `export_universe.py` automatically every Saturday at 12:00 UTC (markets
@@ -179,10 +192,10 @@ access on a fixed schedule. Results are logged to `screener_history.xlsx` at
 the repo root, one sheet per setup, tracking only what CHANGED (newly added
 or dropped tickers) instead of rewriting the whole list every day.
 
-Universe used: live "All US Stocks" fetch first, falling back to the bundled
-`nasdaq_nyse_common_stock.csv` if that fails, falling back further to S&P 500
-+ Nasdaq-100 combined only if the CSV itself is unavailable -- see "Keeping
-the common-stock list updated" above.
+Universe used: live full-symbol-directory fetch first, falling back to the
+bundled `nasdaq_nyse_common_stock.csv` if that fails, falling back further to
+S&P 500 + Nasdaq-100 combined only if the CSV itself is unavailable -- see
+"Keeping the common-stock list updated" above.
 
 ### Enabling it
 No separate "enable" step -- just make sure both of these are pushed to your

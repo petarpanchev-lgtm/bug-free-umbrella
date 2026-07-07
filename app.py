@@ -15,6 +15,10 @@ Next Generation" (Chapter 1):
     - Episodic Pivot Trade Planner
     - Parabolic Short Trade Planner
 
+Laid out as a two-step workflow: Step 1 picks a strategy and screens a
+universe for candidates; Step 2 takes a ticker (from Step 1, or one you
+already have) and calculates the exact entry/stop/position size.
+
 See kullamagi_setups.py for the exact book citations behind every
 threshold used here. Deploy on Streamlit Community Cloud (see README.md).
 """
@@ -157,12 +161,6 @@ with st.expander("Manual trigger: run the daily screener now (GitHub Actions)", 
         else:
             st.error(msg)
 
-tabs = st.tabs([
-    "🟢 Breakout Screener", "🚀 EP Screener", "🔻 Parabolic Short Screener",
-    "🧮 Breakout Calculator", "🧮 EP Calculator", "🧮 Parabolic Short Calculator",
-])
-(tab_bo_scr, tab_ep_scr, tab_ps_scr, tab_bo_calc, tab_ep_calc, tab_ps_calc) = tabs
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -192,13 +190,14 @@ def universe_picker(key_prefix):
         [
             "S&P 500",
             "Nasdaq-100",
-            "Common Stocks (bundled list)",
+            "All NYSE and NASDAQ common stocks (3963 tickers)",
             "Custom list",
         ],
         horizontal=True, key=f"{key_prefix}_universe",
-        help="'Common Stocks (bundled list)' scans every NASDAQ/NYSE common stock "
-             "(~4,000 tickers, no ETFs) from a local CSV refreshed weekly -- no live "
-             "symbol-directory fetch needed, so it's fast and reliable.",
+        help="'All NYSE and NASDAQ common stocks' reads a local CSV (no ETFs) "
+             "refreshed weekly -- no live symbol-directory fetch needed, so it's "
+             "fast and reliable. Ticker count drifts slightly as that weekly "
+             "refresh runs (new listings/delistings).",
     )
     custom_tickers = None
     if universe_choice == "Custom list":
@@ -226,11 +225,12 @@ def universe_picker(key_prefix):
     max_tickers = st.number_input(
         "Max tickers to scan (safety cap)", min_value=10, max_value=10000,
         value=3000, step=100, key=f"{key_prefix}_max",
-        help="Raise this to scan the full 'Common Stocks (bundled list)' universe "
-             "(~4,000 tickers). Larger scans take longer -- expect several minutes "
-             "for 3,000+, and Yahoo Finance may rate-limit very large scans (the app "
-             "retries failed batches automatically, but if you keep seeing rate-limit "
-             "errors, lower this number or try again in a few minutes).",
+        help="Raise this to scan the full 'All NYSE and NASDAQ common stocks' "
+             "universe (~4,000 tickers). Larger scans take longer -- expect "
+             "several minutes for 3,000+, and Yahoo Finance may rate-limit very "
+             "large scans (the app retries failed batches automatically, but if "
+             "you keep seeing rate-limit errors, lower this number or try again "
+             "in a few minutes).",
     )
 
     if st.button("Fetch universe & run", type="primary", width="stretch", key=f"{key_prefix}_run"):
@@ -240,7 +240,7 @@ def universe_picker(key_prefix):
         elif universe_choice == "Nasdaq-100":
             with st.spinner("Fetching Nasdaq-100 list..."):
                 tickers = get_nasdaq100_tickers()
-        elif universe_choice == "Common Stocks (bundled list)":
+        elif universe_choice == "All NYSE and NASDAQ common stocks (3963 tickers)":
             with st.spinner("Loading bundled common-stock list..."):
                 tickers = get_common_stocks_from_csv()
                 if not tickers:
@@ -325,9 +325,10 @@ def render_calc_result(res, account_size):
 
 
 # ---------------------------------------------------------------------------
-# Breakout Screener
+# Screeners (Step 1 renderers)
 # ---------------------------------------------------------------------------
-with tab_bo_scr:
+
+def render_breakout_screener():
     st.subheader("Breakout / Momentum Burst Screener")
     st.caption(
         "Flags tickers that are (1) a leading stock -- top 1-2% of THIS batch by 1/3/6-month "
@@ -371,10 +372,8 @@ with tab_bo_scr:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
                     st.write(", ".join(str(e) for e in errors))
 
-# ---------------------------------------------------------------------------
-# Episodic Pivot Screener
-# ---------------------------------------------------------------------------
-with tab_ep_scr:
+
+def render_ep_screener():
     st.subheader("Episodic Pivot Screener")
     st.caption(
         "Flags tickers gapping up at least the threshold below on volume well above their "
@@ -421,10 +420,8 @@ with tab_ep_scr:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
                     st.write(", ".join(str(e) for e in errors))
 
-# ---------------------------------------------------------------------------
-# Parabolic Short Screener
-# ---------------------------------------------------------------------------
-with tab_ps_scr:
+
+def render_parabolic_short_screener():
     st.subheader("Parabolic Short Screener")
     st.caption(
         "Flags tickers up 3-5 consecutive days with a cumulative gain clearing the threshold "
@@ -461,10 +458,12 @@ with tab_ps_scr:
                 with st.expander(f"{len(errors)} tickers skipped (no/insufficient data)"):
                     st.write(", ".join(str(e) for e in errors))
 
+
 # ---------------------------------------------------------------------------
-# Breakout Calculator
+# Calculators (Step 2 renderers)
 # ---------------------------------------------------------------------------
-with tab_bo_calc:
+
+def render_breakout_calculator():
     st.subheader("Breakout Trade Planner")
     st.caption(
         "Entry = high of the recent consolidation. Stop = consolidation low (stand-in for "
@@ -489,10 +488,8 @@ with tab_bo_calc:
                 res = calc_breakout_trade(df, bo_account, bo_risk, bo_cons)
                 render_calc_result(res, bo_account)
 
-# ---------------------------------------------------------------------------
-# Episodic Pivot Calculator
-# ---------------------------------------------------------------------------
-with tab_ep_calc:
+
+def render_ep_calculator():
     st.subheader("Episodic Pivot Trade Planner")
     st.caption(
         "Entry = high of the first 5-minute bar (or the first 1-hour bar if confirming volume "
@@ -518,10 +515,8 @@ with tab_ep_calc:
                 res = calc_episodic_pivot_trade(daily, intraday, ep_account, ep_risk, min_gap_pct=ep_min_gap_c)
                 render_calc_result(res, ep_account)
 
-# ---------------------------------------------------------------------------
-# Parabolic Short Calculator
-# ---------------------------------------------------------------------------
-with tab_ps_calc:
+
+def render_parabolic_short_calculator():
     st.subheader("Parabolic Short Trade Planner")
     st.caption(
         "Entry (short trigger) = break of the opening range low (first 5-minute bar's low), or a "
@@ -546,6 +541,51 @@ with tab_ps_calc:
             else:
                 res = calc_parabolic_short_trade(daily, intraday, ps_account, ps_risk, min_gain_pct=ps_min_gain_c)
                 render_calc_result(res, ps_account)
+
+
+# ---------------------------------------------------------------------------
+# Page layout: two-step workflow
+#   Row 1 (Step 1) -- pick a strategy, screen a universe for candidates.
+#   Row 2 (Step 2) -- take a ticker (from Step 1, or one you already have)
+#                      and calculate its exact entry/stop/position size.
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.header("Step 1 -- Select a strategy and scan")
+st.caption(
+    "Pick which of the three book setups to screen for, choose a universe, and click "
+    "'Fetch universe & run' to find candidates matching all of that setup's conditions."
+)
+screener_choice = st.radio(
+    "Strategy to screen",
+    ["🟢 Breakout / Momentum Burst", "🚀 Episodic Pivot (EP)", "🔻 Parabolic Short"],
+    horizontal=True, key="screener_strategy_choice",
+)
+if screener_choice == "🟢 Breakout / Momentum Burst":
+    render_breakout_screener()
+elif screener_choice == "🚀 Episodic Pivot (EP)":
+    render_ep_screener()
+else:
+    render_parabolic_short_screener()
+
+st.divider()
+st.header("Step 2 -- Calculate trade parameters")
+st.caption(
+    "Got a candidate ticker (from Step 1 above, or one you already have in mind)? Pick the "
+    "matching strategy, type in the ticker, and click 'Calculate' for the exact entry, stop, "
+    "and position size."
+)
+calc_choice = st.radio(
+    "Strategy to calculate",
+    ["🧮 Breakout", "🧮 Episodic Pivot (EP)", "🧮 Parabolic Short"],
+    horizontal=True, key="calc_strategy_choice",
+)
+if calc_choice == "🧮 Breakout":
+    render_breakout_calculator()
+elif calc_choice == "🧮 Episodic Pivot (EP)":
+    render_ep_calculator()
+else:
+    render_parabolic_short_calculator()
 
 st.divider()
 st.caption(
