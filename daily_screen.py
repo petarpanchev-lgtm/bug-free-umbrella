@@ -63,20 +63,23 @@ HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screene
 
 SETUPS = ["Breakout", "EP", "Parabolic Short"]
 
-HEADER = ["Date", "Ticker", "Status", "Entry", "Stop Loss", "Take Profit"]
+HEADER = ["Date", "Ticker", "Status", "Entry", "Stop Loss", "Take Profit", "Shares (10k Acct)"]
 
 # Placeholder inputs for the trade-planner calculators below. Entry, Stop
 # Loss, and the R-multiple targets are derived purely from price data --
-# account size and risk % only affect position size (shares/$ value), which
-# this log doesn't store, so any reasonable placeholder values work here.
+# account size and risk % only affect position size (Shares), which is why
+# "Shares (10k Acct)" is explicitly labeled with the $10,000 / 0.5%-risk
+# assumption baked into it -- re-run the app's own calculator with your real
+# account size and risk % for your actual position size.
 _CALC_ACCOUNT_SIZE = 10000.0
 _CALC_RISK_PCT = 0.5
 
 
 def _trade_params_breakout(ticker, price_data):
     """Runs calc_breakout_trade for one ticker and extracts Entry/Stop
-    Loss/Take Profit (2R target). Returns None if there's not enough data
-    or the calculation fails for any reason -- caller logs blanks."""
+    Loss/Take Profit (2R target)/Shares (at the $10k/0.5%-risk placeholder).
+    Returns None if there's not enough data or the calculation fails for
+    any reason -- caller logs blanks."""
     df = price_data.get(ticker)
     if df is None or df.empty:
         return None
@@ -85,7 +88,10 @@ def _trade_params_breakout(ticker, price_data):
     except Exception:
         return None
     targets = res.get("targets") or {}
-    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
+    return {
+        "Entry": res.get("entry"), "Stop Loss": res.get("stop"),
+        "Take Profit": targets.get("2R"), "Shares": res.get("shares"),
+    }
 
 
 def _trade_params_ep(ticker, price_data):
@@ -104,7 +110,10 @@ def _trade_params_ep(ticker, price_data):
     except Exception:
         return None
     targets = res.get("targets") or {}
-    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
+    return {
+        "Entry": res.get("entry"), "Stop Loss": res.get("stop"),
+        "Take Profit": targets.get("2R"), "Shares": res.get("shares"),
+    }
 
 
 def _trade_params_parabolic_short(ticker, price_data):
@@ -123,7 +132,10 @@ def _trade_params_parabolic_short(ticker, price_data):
     except Exception:
         return None
     targets = res.get("targets") or {}
-    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
+    return {
+        "Entry": res.get("entry"), "Stop Loss": res.get("stop"),
+        "Take Profit": targets.get("2R"), "Shares": res.get("shares"),
+    }
 
 
 def get_universe():
@@ -168,12 +180,13 @@ def reconstruct_current_state(ws):
 
 def reconstruct_current_state_detailed(ws):
     """Like reconstruct_current_state, but keeps each currently-active
-    ticker's most recently logged Date/Entry/Stop Loss/Take Profit instead
-    of just set membership. Used by the app (app.py) to render a live view
-    of screener_history.xlsx without duplicating the replay logic.
+    ticker's most recently logged Date/Entry/Stop Loss/Take Profit/Shares
+    instead of just set membership. Used by the app (app.py) to render a
+    live view of screener_history.xlsx without duplicating the replay logic.
 
     Returns {ticker: {"Date Flagged": ..., "Entry": ..., "Stop Loss": ...,
-    "Take Profit": ...}} for every ticker currently considered hit.
+    "Take Profit": ..., "Shares": ...}} for every ticker currently
+    considered hit.
     """
     state = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -183,6 +196,7 @@ def reconstruct_current_state_detailed(ws):
         entry = row[3] if len(row) > 3 else None
         stop = row[4] if len(row) > 4 else None
         take_profit = row[5] if len(row) > 5 else None
+        shares = row[6] if len(row) > 6 else None
         if ticker is None or status is None:
             continue
         if status in ("Initial", "Added"):
@@ -191,10 +205,32 @@ def reconstruct_current_state_detailed(ws):
                 "Entry": entry,
                 "Stop Loss": stop,
                 "Take Profit": take_profit,
+                "Shares": shares,
             }
         elif status == "Dropped":
             state.pop(ticker, None)
     return state
+
+
+def _find_last_active_rows(ws):
+    """Replays a sheet's history like reconstruct_current_state, but returns
+    {ticker: row_index} pointing at the specific Initial/Added row still
+    "active" for each currently-flagged ticker -- i.e. the exact row
+    update_sheet's backfill step should edit in place if that ticker's
+    trade params are blank."""
+    last_row = {}
+    for row_idx in range(2, ws.max_row + 1):
+        row = [c.value for c in ws[row_idx]]
+        if not row or row[0] is None:
+            continue
+        ticker, status = row[1], row[2]
+        if ticker is None or status is None:
+            continue
+        if status in ("Initial", "Added"):
+            last_row[ticker] = row_idx
+        elif status == "Dropped":
+            last_row.pop(ticker, None)
+    return last_row
 
 
 def load_or_create_workbook():
@@ -224,15 +260,26 @@ def update_sheet(wb, setup_name, today_hits, today_str, trade_params_fn, price_d
     """Diff today's hits against the reconstructed prior state for this
     setup's sheet, and append only the rows that changed. Every "Initial" or
     "Added" row also gets that setup's calculator run against it (Entry,
-    Stop Loss, Take Profit = 2R target); "Dropped" rows leave those columns
-    blank since the setup no longer applies. Returns a small summary dict
-    for the run log."""
+    Stop Loss, Take Profit = 2R target, Shares at the $10k/0.5%-risk
+    placeholder); "Dropped" rows leave those columns blank since the setup
+    no longer applies.
+
+    Tickers that are still flagged today AND were already flagged before
+    ("unchanged") don't get a new row -- but if their most recent row is
+    missing any of Entry/Stop Loss/Take Profit/Shares (e.g. logged by a run
+    from before these columns existed), this backfills those specific cells
+    in place. Otherwise a ticker flagged before this feature existed would
+    stay blank forever, since it may never naturally cycle through
+    Added/Dropped again.
+
+    Returns a small summary dict for the run log."""
     ws = wb[setup_name]
     previous_state = reconstruct_current_state(ws)
     today_set = set(today_hits)
 
     added = sorted(today_set - previous_state)
     dropped = sorted(previous_state - today_set)
+    unchanged = sorted(today_set & previous_state)
     is_first_run = ws.max_row <= 1  # only the header row present so far
 
     def _row(ticker, status):
@@ -243,8 +290,10 @@ def update_sheet(wb, setup_name, today_hits, today_str, trade_params_fn, price_d
         entry = params.get("Entry") if params else None
         stop = params.get("Stop Loss") if params else None
         take_profit = params.get("Take Profit") if params else None
-        return [today_str, ticker, status, entry, stop, take_profit]
+        shares = params.get("Shares") if params else None
+        return [today_str, ticker, status, entry, stop, take_profit, shares]
 
+    backfilled = 0
     if is_first_run:
         for t in sorted(today_set):
             ws.append(_row(t, "Initial"))
@@ -254,11 +303,31 @@ def update_sheet(wb, setup_name, today_hits, today_str, trade_params_fn, price_d
             ws.append(_row(t, "Added"))
         for t in dropped:
             ws.append(_row(t, "Dropped"))
+
+        if unchanged:
+            last_row_for_ticker = _find_last_active_rows(ws)
+            for t in unchanged:
+                row_idx = last_row_for_ticker.get(t)
+                if row_idx is None:
+                    continue
+                existing = [ws.cell(row=row_idx, column=c).value for c in (4, 5, 6, 7)]
+                if all(v is not None for v in existing):
+                    continue  # already fully populated, nothing to backfill
+                params = trade_params_fn(t, price_data)
+                if not params:
+                    continue
+                ws.cell(row=row_idx, column=4, value=params.get("Entry"))
+                ws.cell(row=row_idx, column=5, value=params.get("Stop Loss"))
+                ws.cell(row=row_idx, column=6, value=params.get("Take Profit"))
+                ws.cell(row=row_idx, column=7, value=params.get("Shares"))
+                backfilled += 1
+
         summary = {
             "mode": "diff",
             "added": len(added),
             "dropped": len(dropped),
-            "unchanged": len(today_set & previous_state),
+            "unchanged": len(unchanged),
+            "backfilled": backfilled,
         }
     return summary
 
@@ -306,7 +375,8 @@ def main():
             print(f"[{setup_name}] First run recorded: {s['count']} initial hits.")
         else:
             print(f"[{setup_name}] {s['added']} added, {s['dropped']} dropped, "
-                  f"{s['unchanged']} unchanged since last run.")
+                  f"{s['unchanged']} unchanged since last run "
+                  f"({s.get('backfilled', 0)} unchanged tickers had blank trade params backfilled).")
 
 
 if __name__ == "__main__":

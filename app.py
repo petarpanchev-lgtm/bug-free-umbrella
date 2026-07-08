@@ -176,12 +176,22 @@ def render_daily_scan_results():
     Reads screener_history.xlsx straight from disk (the same file
     daily_screen.py writes and GitHub Actions commits back to the repo on
     schedule) and shows, per setup, the tickers currently flagged along with
-    the Entry/Stop Loss/Take Profit logged when each was first flagged --
-    plus the full Initial/Added/Dropped history underneath.
+    the Entry/Stop Loss/Take Profit/Shares logged when each was first
+    flagged -- plus the full Initial/Added/Dropped history underneath.
+    Shares assumes a $10,000 account and 0.5% risk per trade (see
+    daily_screen.py's _CALC_ACCOUNT_SIZE/_CALC_RISK_PCT) -- Entry/Stop
+    Loss/Take Profit don't depend on account size, but Shares does, so
+    re-run the app's own calculator below with your real numbers for your
+    actual position size.
 
     No extra infrastructure needed: Streamlit Community Cloud auto-redeploys
     on every push to the repo, including the automated daily commit, so this
     view stays in sync with at most a couple of minutes' lag after each run.
+
+    Also self-heals: if a ticker is still flagged today but its logged row
+    predates these columns (blank Entry/Stop Loss/Take Profit/Shares), the
+    next daily_screen.py run backfills those cells in place instead of
+    leaving them blank forever.
     """
     if not os.path.exists(HISTORY_PATH):
         st.info(
@@ -626,8 +636,10 @@ st.header("📋 Latest Automated Daily Scan Results")
 st.caption(
     "Read directly from screener_history.xlsx, updated once a day by the GitHub Actions "
     "workflow (or on-demand via the manual trigger above). Shows tickers currently flagged "
-    "as of the most recent run, with the Entry/Stop Loss/Take Profit logged when each was "
-    "first flagged."
+    "as of the most recent run, with the Entry/Stop Loss/Take Profit/Shares logged when each "
+    "was first flagged. Shares assumes a $10,000 account and 0.5% risk per trade -- use the "
+    "calculator in Step 2 below with your real account size and risk % for your actual "
+    "position size."
 )
 render_daily_scan_results()
 
