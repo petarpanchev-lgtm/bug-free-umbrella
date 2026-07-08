@@ -23,11 +23,13 @@ See kullamagi_setups.py for the exact book citations behind every
 threshold used here. Deploy on Streamlit Community Cloud (see README.md).
 """
 
+import os
 import re
 
 import requests
 import streamlit as st
 import pandas as pd
+from openpyxl import load_workbook
 
 from kullamagi_score import fetch_data, market_regime
 from screener import (
@@ -41,6 +43,7 @@ from kullamagi_setups import (
     calc_breakout_trade, calc_episodic_pivot_trade, calc_parabolic_short_trade,
     fetch_intraday_5m,
 )
+from daily_screen import HISTORY_PATH, SETUPS, reconstruct_current_state_detailed
 
 st.set_page_config(page_title="Kullamagi Setup Tools", page_icon="📈", layout="wide")
 
@@ -165,6 +168,73 @@ with st.expander("Manual trigger: run the daily screener now (GitHub Actions)", 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+# (render_daily_scan_results is defined here; called further down, after all
+# helper/render functions are defined, in the page-layout section.)
+
+def render_daily_scan_results():
+    """
+    Reads screener_history.xlsx straight from disk (the same file
+    daily_screen.py writes and GitHub Actions commits back to the repo on
+    schedule) and shows, per setup, the tickers currently flagged along with
+    the Entry/Stop Loss/Take Profit logged when each was first flagged --
+    plus the full Initial/Added/Dropped history underneath.
+
+    No extra infrastructure needed: Streamlit Community Cloud auto-redeploys
+    on every push to the repo, including the automated daily commit, so this
+    view stays in sync with at most a couple of minutes' lag after each run.
+    """
+    if not os.path.exists(HISTORY_PATH):
+        st.info(
+            "No automated scan history yet -- screener_history.xlsx is created after the "
+            "first run of the daily GitHub Actions screener. Trigger it manually above, or "
+            "wait for the next scheduled run (weekdays, 21:30 UTC)."
+        )
+        return
+
+    try:
+        wb = load_workbook(HISTORY_PATH, data_only=True)
+    except Exception as e:
+        st.error(f"Couldn't read screener_history.xlsx: {e}")
+        return
+
+    last_run_dates = []
+    for setup_name in SETUPS:
+        if setup_name not in wb.sheetnames:
+            continue
+        ws = wb[setup_name]
+
+        all_rows = list(ws.iter_rows(min_row=1, values_only=True))
+        header, data_rows = (all_rows[0], all_rows[1:]) if all_rows else ([], [])
+        dates_in_sheet = [r[0] for r in data_rows if r and r[0]]
+        if dates_in_sheet:
+            last_run_dates.append(max(str(d) for d in dates_in_sheet))
+
+        state = reconstruct_current_state_detailed(ws)
+        st.subheader(f"{setup_name} -- currently flagged ({len(state)})")
+        if not state:
+            st.caption("No tickers currently flagged for this setup.")
+        else:
+            rows = [{"Ticker": t, **v} for t, v in state.items()]
+            rows.sort(key=lambda r: str(r.get("Date Flagged") or ""), reverse=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+        with st.expander(f"{setup_name}: full history (all Initial/Added/Dropped rows)"):
+            if data_rows:
+                st.dataframe(pd.DataFrame(data_rows, columns=header), hide_index=True, width="stretch")
+            else:
+                st.caption("No history rows yet.")
+
+    if last_run_dates:
+        st.caption(f"Last recorded run: {max(last_run_dates)}")
+
+    with open(HISTORY_PATH, "rb") as f:
+        st.download_button(
+            "Download full screener_history.xlsx", f.read(),
+            "screener_history.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_history_xlsx",
+        )
+
 
 def render_market_environment(me):
     if not me or me.get("trend") == "unknown":
@@ -544,11 +614,22 @@ def render_parabolic_short_calculator():
 
 
 # ---------------------------------------------------------------------------
-# Page layout: two-step workflow
+# Page layout: automated results, then the two-step manual workflow
+#   Latest Automated Daily Scan Results -- read screener_history.xlsx as-is.
 #   Row 1 (Step 1) -- pick a strategy, screen a universe for candidates.
 #   Row 2 (Step 2) -- take a ticker (from Step 1, or one you already have)
 #                      and calculate its exact entry/stop/position size.
 # ---------------------------------------------------------------------------
+
+st.divider()
+st.header("📋 Latest Automated Daily Scan Results")
+st.caption(
+    "Read directly from screener_history.xlsx, updated once a day by the GitHub Actions "
+    "workflow (or on-demand via the manual trigger above). Shows tickers currently flagged "
+    "as of the most recent run, with the Entry/Stop Loss/Take Profit logged when each was "
+    "first flagged."
+)
+render_daily_scan_results()
 
 st.divider()
 st.header("Step 1 -- Select a strategy and scan")

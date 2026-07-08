@@ -166,6 +166,37 @@ def reconstruct_current_state(ws):
     return state
 
 
+def reconstruct_current_state_detailed(ws):
+    """Like reconstruct_current_state, but keeps each currently-active
+    ticker's most recently logged Date/Entry/Stop Loss/Take Profit instead
+    of just set membership. Used by the app (app.py) to render a live view
+    of screener_history.xlsx without duplicating the replay logic.
+
+    Returns {ticker: {"Date Flagged": ..., "Entry": ..., "Stop Loss": ...,
+    "Take Profit": ...}} for every ticker currently considered hit.
+    """
+    state = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or row[0] is None:
+            continue
+        date, ticker, status = row[0], row[1], row[2]
+        entry = row[3] if len(row) > 3 else None
+        stop = row[4] if len(row) > 4 else None
+        take_profit = row[5] if len(row) > 5 else None
+        if ticker is None or status is None:
+            continue
+        if status in ("Initial", "Added"):
+            state[ticker] = {
+                "Date Flagged": date,
+                "Entry": entry,
+                "Stop Loss": stop,
+                "Take Profit": take_profit,
+            }
+        elif status == "Dropped":
+            state.pop(ticker, None)
+    return state
+
+
 def load_or_create_workbook():
     if os.path.exists(HISTORY_PATH):
         wb = load_workbook(HISTORY_PATH)
