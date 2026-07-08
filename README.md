@@ -242,13 +242,26 @@ Two ways to trigger a run without waiting for the schedule:
 
 ### Reading the results
 Open `screener_history.xlsx` from the repo. Each sheet (`Breakout`, `EP`,
-`Parabolic Short`) has three columns: `Date`, `Ticker`, `Status`. The first
-run for a setup logs every current hit as `Initial`; every run after that
-only adds a row when a ticker newly qualifies (`Added`) or stops qualifying
-(`Dropped`) -- tickers still flagged from the day before get no new row, so
-the log stays short over time. To see what's currently flagged as of any
-date, replay the rows top to bottom (Initial/Added → in the set, Dropped →
-out of the set).
+`Parabolic Short`) has six columns: `Date`, `Ticker`, `Status`, `Entry`,
+`Stop Loss`, `Take Profit`. The first run for a setup logs every current hit
+as `Initial`; every run after that only adds a row when a ticker newly
+qualifies (`Added`) or stops qualifying (`Dropped`) -- tickers still flagged
+from the day before get no new row, so the log stays short over time. To see
+what's currently flagged as of any date, replay the rows top to bottom
+(Initial/Added → in the set, Dropped → out of the set).
+
+`Entry`, `Stop Loss`, and `Take Profit` come from that setup's own
+trade-planner calculator (the same logic behind the app's Step 2
+calculators) run automatically against every `Initial`/`Added` ticker --
+`Take Profit` is the 2R target, matching the book's "sell 1/3-1/2 in the
+first 3-5 days or at 2-3R" rule. `Dropped` rows leave these three columns
+blank since the setup no longer applies. These numbers use a generic
+$10,000/0.5%-risk placeholder purely to derive entry/stop/targets, which
+don't actually depend on account size or risk % -- run the app's calculator
+with your real numbers to get position size (shares/$ value). For EP and
+Parabolic Short, the calculator tries to use that day's real 5-minute
+intraday bars for the entry/stop, same as the app; if unavailable it falls
+back to the daily bar approximation.
 
 ## Disclaimer
 Educational tool only, not financial advice. Not affiliated with or endorsed

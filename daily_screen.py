@@ -23,6 +23,16 @@ it's reconstructed by replaying each sheet's own history top to bottom
 keeps the workbook itself as the single source of truth, so there's
 nothing else to keep in sync.
 
+Every "Initial"/"Added" row also runs that setup's own trade-planner
+calculator (the same one behind the app's Step 2 calculators) against
+the ticker and logs Entry / Stop Loss / Take Profit (2R target), so the
+sheet doubles as a ready-to-use trade plan, not just a candidate list.
+"Dropped" rows leave those columns blank -- the setup no longer applies,
+so there's no trade to plan. The calculator uses a generic $10,000 /
+0.5%-risk placeholder purely to derive entry/stop/targets, which don't
+actually depend on account size -- re-run the app's own calculator with
+your real account size for the position size that matches your risk.
+
 Usage:
     python daily_screen.py
 
@@ -43,11 +53,77 @@ from screener import (
     get_common_stocks_from_csv,
     batch_download,
 )
-from kullamagi_setups import screen_breakouts, screen_episodic_pivots, screen_parabolic_shorts
+from kullamagi_setups import (
+    screen_breakouts, screen_episodic_pivots, screen_parabolic_shorts,
+    calc_breakout_trade, calc_episodic_pivot_trade, calc_parabolic_short_trade,
+    fetch_intraday_5m,
+)
 
 HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screener_history.xlsx")
 
 SETUPS = ["Breakout", "EP", "Parabolic Short"]
+
+HEADER = ["Date", "Ticker", "Status", "Entry", "Stop Loss", "Take Profit"]
+
+# Placeholder inputs for the trade-planner calculators below. Entry, Stop
+# Loss, and the R-multiple targets are derived purely from price data --
+# account size and risk % only affect position size (shares/$ value), which
+# this log doesn't store, so any reasonable placeholder values work here.
+_CALC_ACCOUNT_SIZE = 10000.0
+_CALC_RISK_PCT = 0.5
+
+
+def _trade_params_breakout(ticker, price_data):
+    """Runs calc_breakout_trade for one ticker and extracts Entry/Stop
+    Loss/Take Profit (2R target). Returns None if there's not enough data
+    or the calculation fails for any reason -- caller logs blanks."""
+    df = price_data.get(ticker)
+    if df is None or df.empty:
+        return None
+    try:
+        res = calc_breakout_trade(df, _CALC_ACCOUNT_SIZE, _CALC_RISK_PCT)
+    except Exception:
+        return None
+    targets = res.get("targets") or {}
+    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
+
+
+def _trade_params_ep(ticker, price_data):
+    """Runs calc_episodic_pivot_trade for one ticker. Fetches real intraday
+    5-minute bars for the entry/stop if available (same as the app's
+    calculator); falls back to daily open/low if not."""
+    df = price_data.get(ticker)
+    if df is None or df.empty:
+        return None
+    try:
+        intraday = fetch_intraday_5m(ticker)
+    except Exception:
+        intraday = None
+    try:
+        res = calc_episodic_pivot_trade(df, intraday, _CALC_ACCOUNT_SIZE, _CALC_RISK_PCT)
+    except Exception:
+        return None
+    targets = res.get("targets") or {}
+    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
+
+
+def _trade_params_parabolic_short(ticker, price_data):
+    """Runs calc_parabolic_short_trade for one ticker. Fetches real intraday
+    5-minute bars for the entry/stop if available; falls back to daily
+    low/high if not."""
+    df = price_data.get(ticker)
+    if df is None or df.empty:
+        return None
+    try:
+        intraday = fetch_intraday_5m(ticker)
+    except Exception:
+        intraday = None
+    try:
+        res = calc_parabolic_short_trade(df, intraday, _CALC_ACCOUNT_SIZE, _CALC_RISK_PCT)
+    except Exception:
+        return None
+    targets = res.get("targets") or {}
+    return {"Entry": res.get("entry"), "Stop Loss": res.get("stop"), "Take Profit": targets.get("2R")}
 
 
 def get_universe():
@@ -99,14 +175,27 @@ def load_or_create_workbook():
     for name in SETUPS:
         if name not in wb.sheetnames:
             ws = wb.create_sheet(name)
-            ws.append(["Date", "Ticker", "Status"])
+            ws.append(HEADER)
+        else:
+            # Backward-compat: workbooks from before the Entry/Stop Loss/Take
+            # Profit columns existed only have "Date, Ticker, Status". Extend
+            # the header in place rather than rewriting the sheet -- existing
+            # rows just get blank cells for the new columns; only rows
+            # appended from now on populate them.
+            ws = wb[name]
+            for col_idx, col_name in enumerate(HEADER, start=1):
+                if ws.cell(row=1, column=col_idx).value != col_name:
+                    ws.cell(row=1, column=col_idx, value=col_name)
     return wb
 
 
-def update_sheet(wb, setup_name, today_hits, today_str):
+def update_sheet(wb, setup_name, today_hits, today_str, trade_params_fn, price_data):
     """Diff today's hits against the reconstructed prior state for this
-    setup's sheet, and append only the rows that changed. Returns a small
-    summary dict for the run log."""
+    setup's sheet, and append only the rows that changed. Every "Initial" or
+    "Added" row also gets that setup's calculator run against it (Entry,
+    Stop Loss, Take Profit = 2R target); "Dropped" rows leave those columns
+    blank since the setup no longer applies. Returns a small summary dict
+    for the run log."""
     ws = wb[setup_name]
     previous_state = reconstruct_current_state(ws)
     today_set = set(today_hits)
@@ -115,15 +204,25 @@ def update_sheet(wb, setup_name, today_hits, today_str):
     dropped = sorted(previous_state - today_set)
     is_first_run = ws.max_row <= 1  # only the header row present so far
 
+    def _row(ticker, status):
+        if status == "Dropped":
+            params = None
+        else:
+            params = trade_params_fn(ticker, price_data)
+        entry = params.get("Entry") if params else None
+        stop = params.get("Stop Loss") if params else None
+        take_profit = params.get("Take Profit") if params else None
+        return [today_str, ticker, status, entry, stop, take_profit]
+
     if is_first_run:
         for t in sorted(today_set):
-            ws.append([today_str, t, "Initial"])
+            ws.append(_row(t, "Initial"))
         summary = {"mode": "initial", "count": len(today_set)}
     else:
         for t in added:
-            ws.append([today_str, t, "Added"])
+            ws.append(_row(t, "Added"))
         for t in dropped:
-            ws.append([today_str, t, "Dropped"])
+            ws.append(_row(t, "Dropped"))
         summary = {
             "mode": "diff",
             "added": len(added),
@@ -154,9 +253,18 @@ def main():
 
     wb = load_or_create_workbook()
     results = {
-        "Breakout": update_sheet(wb, "Breakout", [h["Ticker"] for h in bo_hits], today_str),
-        "EP": update_sheet(wb, "EP", [h["Ticker"] for h in ep_hits], today_str),
-        "Parabolic Short": update_sheet(wb, "Parabolic Short", [h["Ticker"] for h in ps_hits], today_str),
+        "Breakout": update_sheet(
+            wb, "Breakout", [h["Ticker"] for h in bo_hits], today_str,
+            _trade_params_breakout, price_data,
+        ),
+        "EP": update_sheet(
+            wb, "EP", [h["Ticker"] for h in ep_hits], today_str,
+            _trade_params_ep, price_data,
+        ),
+        "Parabolic Short": update_sheet(
+            wb, "Parabolic Short", [h["Ticker"] for h in ps_hits], today_str,
+            _trade_params_parabolic_short, price_data,
+        ),
     }
 
     wb.save(HISTORY_PATH)
