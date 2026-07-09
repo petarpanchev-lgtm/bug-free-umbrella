@@ -44,6 +44,7 @@ from kullamagi_setups import (
     fetch_intraday_5m,
 )
 from daily_screen import HISTORY_PATH, SETUPS, reconstruct_current_state_detailed
+from backtest import backtest_breakout, summarize_trades
 
 st.set_page_config(page_title="Kullamagi Setup Tools", page_icon="📈", layout="wide")
 
@@ -624,6 +625,101 @@ def render_parabolic_short_calculator():
 
 
 # ---------------------------------------------------------------------------
+# Backtest (Step 3 renderer)
+# ---------------------------------------------------------------------------
+
+def render_backtest():
+    st.subheader("Breakout Setup Backtest (single ticker)")
+    st.caption(
+        "Replays the Breakout setup's MECHANICAL rules (consolidation + ADTR-capped stop + "
+        "the book's partial-profit/trailing-stop exit) over one ticker's full history. Only "
+        "Breakout is backtestable this way -- EP and Parabolic Short key off real intraday bars "
+        "for their exact entry, and Yahoo Finance only keeps ~60 days of 5-minute data, so a "
+        "multi-year backtest of those two isn't possible here."
+    )
+    st.warning(
+        "Book-fidelity caveat: the live screener's 'leading stock' rule ranks the top 1-2% of "
+        "an entire scanned batch by 1/3/6-month return -- a moving target that can't be "
+        "reconstructed for one ticker without re-ranking the whole market on every historical "
+        "day. This backtest substitutes fixed absolute return thresholds instead (adjustable "
+        "below). Treat results as illustrative of what the setup's mechanical rules would have "
+        "done on a stock that was clearly a strong momentum name -- not a literal replay of the "
+        "live screener. See backtest.py for the full writeup of every assumption made."
+    )
+
+    bt_ticker = st.text_input("Ticker", key="bt_ticker").strip().upper()
+    c1, c2, c3 = st.columns(3)
+    bt_ret1 = c1.slider("Min 1-month return % (leading-stock proxy)", 5.0, 100.0, 25.0, 5.0, key="bt_ret1")
+    bt_ret3 = c2.slider("Min 3-month return %", 10.0, 200.0, 40.0, 5.0, key="bt_ret3")
+    bt_ret6 = c3.slider("Min 6-month return %", 20.0, 300.0, 75.0, 5.0, key="bt_ret6")
+
+    c4, c5, c6 = st.columns(3)
+    bt_cons = c4.slider("Consolidation window (days)", 5, 15, 10, 1, key="bt_cons")
+    bt_lookahead = c5.slider("Breakout trigger lookahead (days)", 5, 40, 20, 1, key="bt_lookahead")
+    bt_partial_days = c6.slider("Force partial exit by day", 2, 10, 5, 1, key="bt_partial_days")
+
+    bt_period = st.selectbox(
+        "History to backtest", ["5y", "10y", "max"], index=1, key="bt_period",
+        help="Longer periods find more historical occurrences but take a little longer to fetch.",
+    )
+
+    if st.button("Run backtest", type="primary", key="bt_run_btn"):
+        if not bt_ticker:
+            st.warning("Enter a ticker.")
+        else:
+            with st.spinner(f"Fetching {bt_period} of history for {bt_ticker}..."):
+                df = fetch_data(bt_ticker, period=bt_period)
+            trades, note = backtest_breakout(
+                df,
+                min_ret_1m=bt_ret1, min_ret_3m=bt_ret3, min_ret_6m=bt_ret6,
+                consolidation_days=bt_cons, trigger_lookahead_days=bt_lookahead,
+                partial_max_days=bt_partial_days,
+            )
+            if note:
+                st.error(note)
+            elif not trades:
+                st.warning(
+                    "No occurrences of the setup found over this history with these thresholds "
+                    "-- try loosening the leading-stock % thresholds or widening the "
+                    "consolidation/lookahead windows."
+                )
+            else:
+                summary = summarize_trades(trades)
+                open_note = f", {summary['open_trades']} still open" if summary["open_trades"] else ""
+                st.success(f"{summary['total_trades']} closed trade(s) found{open_note}.")
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Win rate", f"{summary['win_rate_pct']}%" if summary["win_rate_pct"] is not None else "—")
+                m2.metric("Avg R", summary["avg_r"] if summary["avg_r"] is not None else "—")
+                m3.metric("Total R", summary["total_r"] if summary["total_r"] is not None else "—")
+                m4.metric(
+                    "Avg holding days",
+                    summary["avg_holding_days"] if summary["avg_holding_days"] is not None else "—",
+                )
+
+                df_trades = pd.DataFrame(trades)
+                st.dataframe(df_trades, hide_index=True, width="stretch")
+
+                closed = [t for t in trades if not t.get("still_open")]
+                if closed:
+                    equity = pd.Series(
+                        [t["r_multiple"] for t in closed],
+                        index=[t["entry_date"] for t in closed],
+                    ).cumsum()
+                    st.line_chart(equity, height=250)
+                    st.caption(
+                        "Cumulative R-multiple across this ticker's closed trades, in entry order. "
+                        "Not a real equity curve -- doesn't account for position overlap across "
+                        "multiple tickers, compounding, or commissions/slippage."
+                    )
+
+                st.download_button(
+                    "Download trades CSV", df_trades.to_csv(index=False).encode("utf-8"),
+                    f"{bt_ticker}_breakout_backtest.csv", "text/csv", key="bt_dl",
+                )
+
+
+# ---------------------------------------------------------------------------
 # Page layout: automated results, then the two-step manual workflow
 #   Latest Automated Daily Scan Results -- read screener_history.xlsx as-is.
 #   Row 1 (Step 1) -- pick a strategy, screen a universe for candidates.
@@ -679,6 +775,15 @@ elif calc_choice == "🧮 Episodic Pivot (EP)":
     render_ep_calculator()
 else:
     render_parabolic_short_calculator()
+
+st.divider()
+st.header("Step 3 -- Backtest the Breakout setup")
+st.caption(
+    "Curious how this setup would have done historically on a stock you know well? Type a "
+    "ticker, adjust the parameters if you like, and run a mechanical replay over its full price "
+    "history."
+)
+render_backtest()
 
 st.divider()
 st.caption(

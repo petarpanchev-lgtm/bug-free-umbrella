@@ -1,6 +1,6 @@
 # Kullamagi Setup Tools — Web App
 
-Six tools built ONLY from what Kristjan Kullamagi says in his own words in
+Six tools, plus a single-ticker backtester, built ONLY from what Kristjan Kullamagi says in his own words in
 Jack Schwager & George F. Coyle's *Market Wizards: The Next Generation*
 (Chapter 1). No thresholds are pulled from his blog/FAQ or third-party
 scanner write-ups — every number is a direct or clearly-labeled
@@ -18,11 +18,18 @@ in-app "Book citations behind these tools" expander, or the docstrings in
 - Episodic Pivot Trade Planner
 - Parabolic Short Trade Planner
 
+**Backtest** (type in a ticker, replay history): Breakout Setup Backtest —
+mechanically replays the Breakout setup's consolidation/stop/exit rules over
+a single ticker's full price history and reports the resulting trades and
+R-multiples. See "Backtesting the Breakout setup" below for exactly what it
+does and doesn't reproduce faithfully from the book.
+
 See the main `Kullamagi_Trading_Playbook.docx` for the full narrative rule set.
 
 Files in this folder:
-- `app.py` — the Streamlit UI, laid out as a two-step workflow: **Step 1** (top row) picks a strategy and screens a universe for candidates; **Step 2** (bottom row) takes a ticker and calculates its entry/stop/position size. Also has a manual "run the daily screener now" trigger.
+- `app.py` — the Streamlit UI. Top to bottom: a manual "run the daily screener now" trigger, a **Latest Automated Daily Scan Results** section that reads `screener_history.xlsx` straight from the repo, then a three-step manual workflow — **Step 1** (top row) picks a strategy and screens a universe for candidates; **Step 2** (second row) takes a ticker and calculates its entry/stop/position size; **Step 3** (bottom row) backtests the Breakout setup on a single ticker's history.
 - `kullamagi_setups.py` — the setup-specific screener/calculator logic, with book citations in the docstrings
+- `backtest.py` — the Breakout setup backtest engine (`backtest_breakout`, `summarize_trades`); the module docstring has the full writeup of every rule and approximation used
 - `kullamagi_score.py` — shared helpers (`fetch_data`, `market_regime`) plus the original blended 0-100 fit score (superseded by the dedicated tools above, kept for reference)
 - `screener.py` — ticker universe fetchers: S&P 500 / Nasdaq-100 (via Wikipedia, with offline fallbacks), "All NYSE and NASDAQ common stocks" (reads the local `nasdaq_nyse_common_stock.csv`, no network call), plus `get_all_us_tickers()` (live from the Nasdaq Trader symbol directory, used internally by the daily automated screener's fallback chain, not exposed as a manual option) — plus batch price download
 - `nasdaq_nyse_common_stock.csv` — bundled snapshot of every individual common stock (ETFs excluded) on NASDAQ/NYSE/NYSE American/NYSE Arca; see "Keeping the common-stock list updated" below
@@ -92,10 +99,28 @@ server management, no credit card, free for public apps.
   any host that supports Python web apps (Render, Railway, Fly.io, etc.) —
   the command to run is `streamlit run app.py --server.port $PORT --server.address 0.0.0.0`.
 
-## Using the app: a two-step workflow
+## Viewing automated results in the app
 
-The page is laid out top to bottom as two steps, each its own row with its
-own strategy selector — screen first, then calculate:
+Right below the manual-trigger expander, the app has a **Latest Automated
+Daily Scan Results** section that reads `screener_history.xlsx` directly
+from disk — no separate dashboard, database, or webhook needed. For each
+setup it shows the tickers currently flagged (with the Entry/Stop Loss/Take
+Profit logged when each was first flagged) plus the full Initial/Added/
+Dropped history in a collapsed expander, and a button to download the whole
+workbook.
+
+This works with zero extra infrastructure because Streamlit Community Cloud
+auto-redeploys the app on every push to the repo — including the automated
+commit the daily GitHub Actions workflow makes — so the view here reflects
+the latest run within a couple of minutes of it finishing. If you haven't
+run the daily screener yet (locally or via GitHub Actions), this section
+just shows a note that there's no history yet.
+
+## Using the app: a three-step workflow
+
+The page is laid out top to bottom as three steps, each its own row with its
+own strategy selector — screen first, then calculate, then optionally
+backtest:
 
 ### Step 1 (top row) — Select a strategy and scan
 
@@ -131,7 +156,7 @@ Important limitations, by design:
 - Tickers with too little history, or that fail to download, are skipped and
   listed in a collapsed "skipped" section rather than breaking the whole scan.
 
-### Step 2 (bottom row) — Calculate trade parameters
+### Step 2 (middle row) — Calculate trade parameters
 
 Once you've got a candidate ticker — from Step 1 above, or one you already
 have in mind — drop down to the second row to work out the actual trade:
@@ -147,6 +172,16 @@ have in mind — drop down to the second row to work out the actual trade:
 4. The EP and Parabolic Short calculators try to pull real 5-minute intraday
    bars for the exact entry/stop the book describes; if that data isn't
    available, they fall back to today's daily open/low or high and say so.
+
+### Step 3 (bottom row) — Backtest the Breakout setup
+
+Type in a ticker you know well, optionally adjust the leading-stock return
+thresholds, consolidation window, breakout lookahead, and forced-partial-exit
+day, pick how much history to pull (5y / 10y / max), and click **Run
+backtest**. You'll get a win rate, average/total R, average holding period, a
+trade-by-trade table, a cumulative-R chart, and a CSV download. See
+"Backtesting the Breakout setup" below for the important caveat about what
+this can and can't reproduce faithfully from the book.
 
 ## Keeping the common-stock list updated
 
@@ -241,27 +276,76 @@ Two ways to trigger a run without waiting for the schedule:
    separate from your code for exactly this reason.
 
 ### Reading the results
-Open `screener_history.xlsx` from the repo. Each sheet (`Breakout`, `EP`,
-`Parabolic Short`) has six columns: `Date`, `Ticker`, `Status`, `Entry`,
-`Stop Loss`, `Take Profit`. The first run for a setup logs every current hit
-as `Initial`; every run after that only adds a row when a ticker newly
-qualifies (`Added`) or stops qualifying (`Dropped`) -- tickers still flagged
-from the day before get no new row, so the log stays short over time. To see
-what's currently flagged as of any date, replay the rows top to bottom
-(Initial/Added → in the set, Dropped → out of the set).
+Open `screener_history.xlsx` from the repo, or view it in the app's "Latest
+Automated Daily Scan Results" section. Each sheet (`Breakout`, `EP`,
+`Parabolic Short`) has seven columns: `Date`, `Ticker`, `Status`, `Entry`,
+`Stop Loss`, `Take Profit`, `Shares (10k Acct)`. The first run for a setup
+logs every current hit as `Initial`; every run after that only adds a row
+when a ticker newly qualifies (`Added`) or stops qualifying (`Dropped`) --
+tickers still flagged from the day before get no new row, so the log stays
+short over time. To see what's currently flagged as of any date, replay the
+rows top to bottom (Initial/Added → in the set, Dropped → out of the set).
 
-`Entry`, `Stop Loss`, and `Take Profit` come from that setup's own
-trade-planner calculator (the same logic behind the app's Step 2
+`Entry`, `Stop Loss`, `Take Profit`, and `Shares (10k Acct)` come from that
+setup's own trade-planner calculator (the same logic behind the app's Step 2
 calculators) run automatically against every `Initial`/`Added` ticker --
 `Take Profit` is the 2R target, matching the book's "sell 1/3-1/2 in the
-first 3-5 days or at 2-3R" rule. `Dropped` rows leave these three columns
-blank since the setup no longer applies. These numbers use a generic
-$10,000/0.5%-risk placeholder purely to derive entry/stop/targets, which
-don't actually depend on account size or risk % -- run the app's calculator
-with your real numbers to get position size (shares/$ value). For EP and
-Parabolic Short, the calculator tries to use that day's real 5-minute
-intraday bars for the entry/stop, same as the app; if unavailable it falls
-back to the daily bar approximation.
+first 3-5 days or at 2-3R" rule. `Dropped` rows leave all four columns blank
+since the setup no longer applies. `Entry`/`Stop Loss`/`Take Profit` are
+derived purely from price data, independent of account size; `Shares (10k
+Acct)` specifically assumes a $10,000 account and 0.5% risk per trade --
+run the app's calculator with your real account size and risk % for your
+actual position size. For EP and Parabolic Short, the calculator tries to
+use that day's real 5-minute intraday bars for the entry/stop, same as the
+app; if unavailable it falls back to the daily bar approximation.
+
+**Self-healing backfill:** a ticker that's still flagged today but whose
+logged row predates one of these columns (e.g. flagged before `Shares (10k
+Acct)` was added) doesn't stay blank forever -- since "unchanged" tickers
+don't normally get a new row, the next run instead updates that ticker's
+existing row in place, filling in whichever of Entry/Stop Loss/Take
+Profit/Shares is still missing, without touching its original flagged date
+or status.
+
+## Backtesting the Breakout setup
+
+`backtest.py` replays the Breakout / "Momentum Burst" setup's mechanical
+rules over one ticker's full daily history and simulates every occurrence:
+consolidation detection, the ADTR-capped stop, the breakout trigger, a
+partial exit at 2R (or by a forced day if 2R isn't reached within the first
+3-5 days, per the book), then a move to breakeven and a trailing exit on a
+close below either the 10-day or 20-day moving average, per the book's own
+exit rule.
+
+**Why only Breakout, and not EP or Parabolic Short:** EP and Parabolic Short
+both key off real intraday 5-minute bars for their exact entry (first
+5-minute bar high / opening range low), and Yahoo Finance only retains about
+60 days of 5-minute history — nowhere near enough for a meaningful
+multi-year backtest. Breakout's entry and stop are derivable purely from
+daily bars, so it's the only one of the three that can be backtested
+accurately over years of history with the data this project already uses.
+
+**The one rule this backtest can't reproduce exactly — "leading stock":**
+the live screener defines a leading stock as ranking in the top 1-2% of
+*the specific batch of tickers scanned that day* by 1/3/6-month return — a
+cross-sectional, moving-target rule. A single-ticker backtest has no batch
+to rank against on any given historical day (doing that properly would mean
+re-running the full multi-thousand-ticker screener for every day of
+history, which isn't practical here). Instead, the backtest substitutes
+fixed, adjustable absolute-return thresholds (default: ≥25% over 1 month,
+≥40% over 3 months, or ≥75% over 6 months — clears ANY ONE, same "OR" logic
+the live screener uses across its three windows). Treat backtest results as
+illustrative of what the setup's *mechanical* rules would have done on a
+stock that was clearly a strong momentum name at the time — not a literal
+replay of what the live screener would have flagged on that historical date.
+
+Every other assumption (partial-exit timing, breakeven-stop logic, the
+trailing-stop rule, how R-multiples are blended across the partial and
+remainder) is one reasonable, clearly-labeled operationalization of the
+book's qualitative language ("during the first three to five days," "most of
+the time") — not the only valid one. The full reasoning for each choice is
+in `backtest.py`'s module docstring; adjust the sliders in Step 3, or edit
+the defaults in `backtest.py`, to explore others.
 
 ## Disclaimer
 Educational tool only, not financial advice. Not affiliated with or endorsed
